@@ -26,24 +26,33 @@ class Regex:
     PROTO = re.compile(f'^(?:{CTYPE})' + r'.*' + f' ({NAME})' + r'\(.*\)')
     COLLAPSED = re.compile(r'\[' + f'({NUMVAL}) BYTES: COLLAPSED FUNCTION ({NAME}).*')
     SECRET = re.compile(f'^lst2ch:(.*)')
-    STRUCT = re.compile(f'^({NAME}){SPACES}struc' + r'\s*;\s*\(\s*' +f'sizeof=({NUMVAL})')
+    STRUCT = re.compile(f'^({NAME}){SPACES}struc' + r'\s*;\s*\(\s*' +f'sizeof=({NUMVAL})(?:,\s*[^)]+)?\)')
+    UNION = re.compile(f'^({NAME}){SPACES}union' + r'\s*;\s*\(\s*' +f'sizeof=({NUMVAL})(?:,\s*[^)]+)?\)')
+    MEMBER = re.compile(f'^({NAME}){SPACES}({NAME})' + r'\s*\?')
     # <n[, n]...>
     STRUCTDATA = re.compile(f'<(((?:{NUMVAL}|{STRVAL}),?{SPACEOPT})+)>')
     # StructType <n[, n]...>
     STRUCTINIT = re.compile(f'({NAME}){SPACES}' + STRUCTDATA.pattern)
+    # UnionType <n[, n]...>
+    UNIONINIT = re.compile(f'({NAME}){SPACES}' + STRUCTDATA.pattern)
     # varName StructType <n[,n]...>
     STRUCTVAR = re.compile(f"^({NAME}){SPACES}" + STRUCTINIT.pattern)
+    # varName UnionType <n[,n]...>
+    UNIONVAR = re.compile(f"^({NAME}){SPACES}" + UNIONINIT.pattern)
     # StructType n dup(<n[,n]...>)
     STRUCTDUP = re.compile(f"({NAME}){SPACES}({NUMVAL}){SPACES}" + r'dup\(' + STRUCTDATA.pattern + r'\)')
     # varName StructType n dup(<n[,n]...>)
     STRUCTARR = re.compile(f"^({NAME}){SPACES}" + STRUCTDUP.pattern)
     # varName StructType <?>
     STRUCTBSSVAR = re.compile(f'^({NAME}){SPACES}({NAME}){SPACES}' + r'<\?>')
+    # varName UnionType <?>
+    UNIONBSSVAR = re.compile(f'^({NAME}){SPACES}({NAME}){SPACES}' + r'<\?>')
     # StructType n dup(<?>)
     STRUCTBSSDUP = re.compile(f'({NAME}){SPACES}({NUMVAL}){SPACES}dup' + r'\(<\?>\)')
     # varName StructType n dup(<?>)
     STRUCTBSSARR = re.compile(f'({NAME}){SPACES}' + f'({STRUCTBSSDUP.pattern})')
-    ENUM = re.compile(f'({NAME}){SPACEOPT}={SPACEOPT}({NUMVAL})')    
+    UNIONBSSDUP = re.compile(f'({NAME}){SPACES}({NUMVAL}){SPACES}dup' + r'\(<\?>\)')
+    ENUM = re.compile(f'({NAME}){SPACEOPT}={SPACEOPT}({NUMVAL})')
 
 def parseNum(string):
     if string == '?':

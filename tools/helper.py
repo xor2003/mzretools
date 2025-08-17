@@ -300,6 +300,23 @@ class Struct:
             error(f"Total size of vars ({totalsize}) exceeds size ({self.size}) of structure {self.name}")
         self.vars.extend(vars)
 
+class Union:
+    def __init__(self, name, size):
+        self.name = name
+        self.size = size
+        self.vars = []
+    def getSize(self):
+        return self.size
+    def getMemberCount(self):
+        return len(self.vars)
+    def addVars(self, vars):
+        # For a union, we don't check the total size because members overlap
+        # But we do check that each variable fits in the union size
+        for v in vars:
+            if v.size() > self.size:
+                error(f"Variable {v.name} of size {v.size()} exceeds union {self.name} size {self.size}")
+        self.vars.extend(vars)
+
 class LstIterator:
     '''Iterate over listing lines and extract items for parsing'''
     lstline_re = re.compile(f'^({Regex.NAME}):' + r'([0-9a-fA-F]{4})(.*)')

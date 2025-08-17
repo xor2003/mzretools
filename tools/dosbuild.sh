@@ -18,7 +18,7 @@ cmdline=$@
 function syntax() {
     [ "$1" ] && echo "Error: $1"
     echo "Syntax: dosbuild.sh cc|link|as toolchain -i infiles... -o outfile [-f flags...] [-l libs...]"
-    exit 1
+    exit 241
 }
 
 function debug() {
@@ -28,7 +28,7 @@ function debug() {
 function fatal() {
     if ((DEBUG)); then echo $cmdline; fi
     echo "Error: $1"
-    exit 1
+    exit 242
 }
 
 function basedir() {
@@ -113,7 +113,7 @@ if [ "$tool" != "test" ]; then
         fatal "Toochain not recognized: $chain"
     fi
     ((toolok)) || fatal "Tool '$tool' not supported by toolchain '$chain'"
-    tool_exe=$(find $TOOLCHAIN_DIR -iname "$tool.exe")
+    tool_exe=$(find -L "$TOOLCHAIN_DIR" -iname "$tool.exe" 2>/dev/null | head -1)
     debug "tool = $tool, chain = $chain, tool_exe = $tool_exe"
     [ -f "$tool_exe" ] || fatal "Unable to find '$tool.exe' in $TOOLCHAIN_DIR"
 else
@@ -303,7 +303,7 @@ case $tool in
         ;;
     *)
         echo "Unrecognized tool: $tool";
-        exit 1
+        exit 243
         ;;
 esac
 debug "cmdline: $cmdline"
@@ -317,8 +317,9 @@ set INCLUDE=C:\\$chain\\include
 set LIB=C:\\$chain\\lib
 mount d $infile_dir
 mount e $outfile_dir
+mount c "$(dirname "$tool_exe")/../"
 d:
-$cmdline > log.txt
+$cmdline > LOG.TXT
 EOF
 
 if ((DEBUG)); then 
@@ -328,37 +329,44 @@ if ((DEBUG)); then
 fi
 
 # remove logfile from previous run if exists to avoid reporting bogus errors in case of build failure
-logfile=$infile_dir/log.txt
+logfile=$infile_dir/LOG.TXT
 emu_logfile=build.log
 rm -f $logfile
 rm -f $emu_logfile
 # start bat file in emulator in headless mode
 [ "$tool" != "test" ] && echo "$cmdline"
-SDL_VIDEODRIVER=dummy dosbox -conf $CONF_FILE $BAT_FILE -exit &> $emu_logfile
-# check if successful by examining if output file exists
+SDL_VIDEODRIVER=dummy dosbox -conf $CONF_FILE $BAT_FILE -exit 24&> $emu_logfile
+dosbox_exit=$?
+if (( dosbox_exit != 0 )); then
+    echo "DOSBox exited with error code: $dosbox_exit"
+    exit $dosbox_exit
+fi
+
+# check if successful by examining if output file exists (case-insensitive check)
 if [ "$tool" != "test" ]; then
-    if [ ! -f "$outfile" ]; then
+    # Case-insensitive search for output file
+    outfile_found=$(find "$outfile_dir" -maxdepth 1 -iname "$(basename "$outfile")" -print -quit)
+    if [ -z "$outfile_found" ]; then
         if [ -f "$logfile" ]; then
-            cat $logfile; 
+            cat $logfile;
         else
             cat $emu_logfile
-            echo "Build failed and no logfile found, check emulator configuration"
+            echo "Build failed and no output file found, check emulator configuration"
         fi
-        exit 1;
+        exit 244;
+    else
+        # Use the found file path
+        outfile="$outfile_found"
     fi
-    # trick to get rid of uppercase filename on WSL
-    outfile_tmp="${outfile}.tmp"
-    mv "$outfile" "$outfile_tmp"
-    mv "$outfile_tmp" "$outfile"
     # the linker can create an output file even in presence of errors so check log
     if grep -i "error" $logfile &> /dev/null; then
         rm $outfile
-        cat $logfile; 
+        cat $logfile;
         # special handling for MS C linker output
         [[ $chain =~ ^msc && $tool = "link" ]] && output_unresolved "$logfile"
-        exit 1;
+        exit 245;
     fi
-    if grep -ie "warning" $logfile &> /dev/null || ((VERBOSE)); then 
+    if grep -ie "warning" $logfile &> /dev/null || ((VERBOSE)); then
         cat $logfile;
     fi
 else

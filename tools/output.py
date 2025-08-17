@@ -16,3 +16,6 @@ def info(str):
 def error(str):
     print(f"ERROR: {str}")
     raise RuntimeError
+
+def warning(str):
+    print(f"WARNING: {str}")

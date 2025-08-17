@@ -2,10 +2,10 @@
 import sys
 import os
 from pathlib import Path
-from output import error, debug, info, setDebug
+from output import error, debug, info, setDebug, warning
 from config import Config
 from util import Regex, parseNum, joinStrings, sizeStr, ignoredProc, splitData, percentStr, tweakComment
-from helper import Routine, Variable, Struct, Datatype, LstIterator, StructIterator, enforceType
+from helper import Routine, Variable, Struct, Union, Datatype, LstIterator, StructIterator, enforceType
 import traceback
 
 # TODO: 
@@ -13,7 +13,7 @@ import traceback
 # struct <0> when more than one member
 # generate struct definitions
 
-def parseData(valstr, structs):
+def parseData(valstr, structs, unions):
     debug(f"Parsing value string: {valstr}")
     data = []
     size = 0
@@ -68,7 +68,7 @@ def parseData(valstr, structs):
         elif (match := Regex.STRUCTBSSDUP.match(i)) is not None: # array of bss structs
             structname = match.group(1)
             count = parseNum(match.group(2))
-            struct = getStruct(structs, structname)
+            struct = getStruct(structs, unions, structname)
             debug(f"Structure array, struct: {struct.name}, dup: {sizeStr(count)}, itemsize: {sizeStr(struct.getSize())}")
             datatype = enforceType(datatype, Datatype.BSS)
             size += count
@@ -81,6 +81,7 @@ def parseData(valstr, structs):
 
 def parseInc(path, config):
     structs = {}
+    unions = {}
     enums = {}
     with open(path, encoding="cp437") as incfile:
         for line in incfile:
@@ -92,17 +93,56 @@ def parseInc(path, config):
                     continue
                 struct = Struct(structname, structsize)
                 iter = StructIterator(incfile, structname, structsize)
-                _, structvars, _, _ = parseListing(iter, config, {})
-                if not structvars:
-                    error("No structure variables could be identified")
-                struct.addVars(structvars)
+                structvars = []
+                while True:
+                    item = iter.nextItem()
+                    if item is None:
+                        break
+                    _, _, instr, _ = item
+                    if (match := Regex.MEMBER.match(instr)) is not None:
+                        varname = match.group(1)
+                        vartype = match.group(2)
+                        debug(f"Found struct member: {varname} {vartype}")
+                        var = Variable(varname, None, 0, 0, None)
+                        var.itype = vartype
+                        structvars.append(var)
+                if structvars:
+                    struct.addVars(structvars)
+                else:
+                    warning(f"No variables found in struct {structname}")
                 structs[structname] = struct
+            elif (match := Regex.UNION.match(line)) is not None:
+                unionname = match.group(1)
+                unionsize = parseNum(match.group(2))
+                debug(f'=== Found union {unionname}, size = {sizeStr(unionsize)}')
+                if not unionsize > 0:
+                    continue
+                union = Union(unionname, unionsize)
+                iter = StructIterator(incfile, unionname, unionsize)
+                unionvars = []
+                while True:
+                    item = iter.nextItem()
+                    if item is None:
+                        break
+                    _, _, instr, _ = item
+                    if (match := Regex.MEMBER.match(instr)) is not None:
+                        varname = match.group(1)
+                        vartype = match.group(2)
+                        debug(f"Found union member: {varname} {vartype}")
+                        var = Variable(varname, None, 0, 0, None)
+                        var.itype = vartype
+                        unionvars.append(var)
+                if unionvars:
+                    union.addVars(unionvars)
+                else:
+                    warning(f"No variables found in union {unionname}")
+                unions[unionname] = union
             elif (match := Regex.ENUM.match(line)) is not None:
                 enumname = match.group(1)
                 enumval = parseNum(match.group(2))
                 debug(f'=== Found enum {enumname} = {sizeStr(enumval)}')
                 enums[enumname] = enumval
-    return structs, enums
+    return structs, unions, enums
 
 def sumData(count, var, total):
     if var:
@@ -142,12 +182,14 @@ def saveVariable(var, vars, segment, offset, total_size):
         error(f"Summed up variable size {sizeStr(total_size)} does not agree with offset {sizeStr(offset)}")
     return total_size
 
-def getStruct(structs, name):
+def getStruct(structs, unions, name):
     if name in structs:
         return structs[name]
-    error(f"Unable to find definition of struct {name}, add or update .inc file to config")
+    if name in unions:
+        return unions[name]
+    error(f"Unable to find definition of struct or union {name}, add or update .inc file to config")
 
-def parseListing(iter, config, structs):
+def parseListing(iter, config, structs, unions):
     curVar = None
     curSub = None
     variables = []
@@ -248,7 +290,7 @@ def parseListing(iter, config, structs):
                 if curVar:
                     # have previous variable, need to close
                     running_varsize = saveVariable(curVar, variables, segment, offset, running_varsize)
-                data, count, dtype, comm = parseData(datavalue, structs)
+                data, count, dtype, comm = parseData(datavalue, structs, unions)
                 if comm:
                     comment.append(comm)
                 curVar = Variable(dataname, segment, offset, itemsz, comment, decl_str, decl_off)
@@ -270,7 +312,7 @@ def parseListing(iter, config, structs):
                     datavalue = match.group(2)
                 itemsz = Datatype.TYPESIZE[itemtype]
                 debug(f"Data continuation, item size = '{itemsz}', value = '{datavalue}'")
-                data, count, dtype, comm = parseData(datavalue, structs)
+                data, count, dtype, comm = parseData(datavalue, structs, unions)
                 # TODO: make dummy also if current var is word, but data is bytes
                 if not (curVar and curVar.addData(data, dtype, itemsz)): 
                     # data rejected by current variable, or no variable active, need to create a dummy new one
@@ -312,7 +354,7 @@ def parseListing(iter, config, structs):
             elif (match := Regex.STRUCTBSSVAR.match(instr)) is not None: # uninitialized structure
                 varname = match.group(1)
                 structname = match.group(2)
-                struct = getStruct(structs, structname)
+                struct = getStruct(structs, unions, structname)
                 debug(f"Structure bss variable, name: {varname}, struct: {structname}, size: {sizeStr(struct.size)}")
                 # close previous variable if present
                 running_varsize = saveVariable(curVar, variables, segment, offset, running_varsize)
@@ -323,9 +365,9 @@ def parseListing(iter, config, structs):
                 varname = match.group(1)
                 datavalue = match.group(2)
                 structname = match.group(3)
-                struct = getStruct(structs, structname)
+                struct = getStruct(structs, unions, structname)
                 debug(f"Array of bss structures, name: {varname}, size: {sizeStr(struct.size)}, data: {datavalue}")
-                data, count, dtype, comm = parseData(datavalue, structs)
+                data, count, dtype, comm = parseData(datavalue, structs, unions)
                 # close previous variable if present
                 running_varsize = saveVariable(curVar, variables, segment, offset, running_varsize)
                 curVar = Variable(varname, segment, offset, struct.getSize(), comment, decl_str, decl_off, struct)
@@ -335,19 +377,19 @@ def parseListing(iter, config, structs):
                 varname = match.group(1)
                 structname = match.group(2)
                 vardata = match.group(3)
-                struct = getStruct(structs, structname)
+                struct = getStruct(structs, unions, structname)
                 debug(f"Initialized structure variable, name: {varname}, structname: {structname}, size: {sizeStr(struct.size)}, data: {vardata}")
                 running_varsize = saveVariable(curVar, variables, segment, offset, running_varsize)
-                data, count, dtype, comm = parseData(vardata, structs)
+                data, count, dtype, comm = parseData(vardata, structs, unions)
                 curVar = Variable(varname, segment, offset, struct.getSize(), comment, decl_str, decl_off, struct)
                 curVar.addData(data, dtype, struct.getSize(), struct.name)
                 running_datasize = sumData(1, curVar, running_datasize)
             elif (match := Regex.STRUCTINIT.match(instr)) is not None: # unnamed initialized structure data
                 structname = match.group(1)
                 vardata = match.group(2)
-                struct = getStruct(structs, structname)
+                struct = getStruct(structs, unions, structname)
                 debug(f"Initialized structure data, structname: {structname}, size: {sizeStr(struct.size)}, data: {vardata}")
-                data, count, dtype, comm = parseData(vardata, structs)
+                data, count, dtype, comm = parseData(vardata, structs, unions)
                 if not (curVar and curVar.addData(data, dtype, struct.getSize(), struct.name)): 
                     # data rejected by current variable, or no variable active, need to create a dummy new one
                     debug("Need to create dummy variable")
@@ -362,11 +404,11 @@ def parseListing(iter, config, structs):
                 structname = match.group(2)
                 dupval = parseNum(match.group(3))
                 vardata = match.group(4)
-                struct = getStruct(structs, structname)
+                struct = getStruct(structs, unions, structname)
                 debug(f"Initialized structure array, var: {varname}, struct: {structname}, size: {sizeStr(struct.size)}, dup: {dupval}, data: {vardata}")
                 running_varsize = saveVariable(curVar, variables, segment, offset, running_varsize)
                 curVar = Variable(varname, segment, offset, struct.getSize(), comment, decl_str, decl_off, struct)
-                data, count, dtype, comm = parseData(vardata, structs)
+                data, count, dtype, comm = parseData(vardata, structs, unions)
                 # TODO: implement a better way of handling input by struct vars
                 if len(data) < struct.size:
                     padlen = struct.size - len(data)
@@ -457,18 +499,19 @@ def main(lstpath, outdir, confpath, output_c, output_h):
 
     # discover struct and enum definitions from incfile if it exists
     structs = {}
+    unions = {}
     enums = {}
     incpath = os.path.splitext(lstpath)[0] + '.inc'
     if os.path.isfile(incpath):
         info(f"Found matching include file: {incpath}, parsing")
-        structs, enums = parseInc(incpath, config)
-        debug(f"Done parsing include file, registered {len(structs)} structs, {len(enums)} enums")
+        structs, unions, enums = parseInc(incpath, config)
+        debug(f"Done parsing include file, registered {len(structs)} structs, {len(unions)} unions, {len(enums)} enums")
     
     # discover functions and data from lst file
     debug(f"Parsing listing file")
     lstfile = open(lstpath, 'r', encoding='cp437')
     lst_iter = LstIterator(lstfile)
-    procs, vars, proc_ignored, total_data = parseListing(lst_iter, config, structs)
+    procs, vars, proc_ignored, total_data = parseListing(lst_iter, config, structs, unions)
     # don't continue if input file was empty
     if len(procs) == 0 and len(vars) == 0:
         info("Parsing the listing yielded no results, empty file or broken config?")
