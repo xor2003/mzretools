@@ -586,7 +586,7 @@ void CodeMap::loadFromMapFile(const std::string &path, const Word reloc) {
             segments.push_back(s);
             continue;
         }
-        // try to interpret as a variable
+        // try to interpret as a variable (MUST come before routine parsing)
         else if (!(match = Variable::stringMatch(line)).empty()) {
             const string varname = match.str(1), segname = match.str(2), offstr = match.str(3), attr = match.str(4);
             Segment varseg;
@@ -627,7 +627,8 @@ void CodeMap::loadFromMapFile(const std::string &path, const Word reloc) {
             case 3: // near or far
                 if (token == "NEAR") r.near = true;
                 else if (token == "FAR") r.near = false;
-                else throw ParseError("Line " + to_string(lineno) + ": invalid routine type '" + token + "'");
+                // Allow VAR type for variables (handled above) but still validate routine types
+                else if (token != "VAR") throw ParseError("Line " + to_string(lineno) + ": invalid routine type '" + token + "'");
                 break;
             case 4: // extents
                 bt = BLOCK_EXTENTS;
@@ -749,7 +750,7 @@ void CodeMap::loadFromLinkFile(const std::string &path, const Word reloc) {
             }
             Segment::Type segType = Segment::SEG_NONE;
             if (type == "CODE") segType = Segment::SEG_CODE;
-            else if (type.starts_with("DAT") || type == "BSS" || type == "CONST" || type == "MP" || type == "FAR_DATA" || type == "FAR_BSS") segType = Segment::SEG_DATA;
+            else if ((type.size() >= 3 && type.substr(0, 3) == "DAT") || type == "BSS" || type == "CONST" || type == "MP" || type == "FAR_DATA" || type == "FAR_BSS") segType = Segment::SEG_DATA;
             else {
                 PARSE_DEBUG("Ignoring segment of type '" + type + "'");
                 continue;
