@@ -26,7 +26,8 @@ set(LIBDOS_SRC
     src/output.cpp
     src/instruction.cpp
     src/signature.cpp
-    src/modrm.cpp)
+    src/modrm.cpp
+    src/analysis/offsetmap.cpp)
 
 set(LIBDOS_HDR 
     include/dos/types.h

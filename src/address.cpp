@@ -40,6 +40,8 @@ Address::Address(const std::string &str, const bool fixNormal) {
     if (fixNormal) normalize();
 }
 
+const Address Address::INVALID = {ADDR_INVALID, ADDR_INVALID};
+
 Address::Address(const Address &other, const SWord displacement) : segment(other.segment), offset(other.offset) {
     offset += displacement;
 }

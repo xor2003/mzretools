@@ -21,34 +21,7 @@ class Executable;
 // TODO: 
 // - implement calculation of memory offsets based on register values from instruction operand type enum, allow for unknown values, see jump @ 0xab3 in hello.exe
 
-
-// utility class used in code analysis routines, keeps mappings of equivalent offsets between two executables for code (calls, jumps), data (global vars) and stack (local vars)
-// to make sure they are consistent. This is particulary important in the code comparison routines to know if there is a problem with the executable layout other than just the instructions themselves.
-class OffsetMap {
-    using MapSet = std::vector<SOffset>;
-    Size maxData;
-    std::map<Address, Address> codeMap;
-    std::map<SOffset, MapSet> dataMap;
-    std::map<SOffset, SOffset> stackMap;
-    std::vector<Segment> segments;
-
-public:
-    // the argument is the maximum number of data segments, we allow as many alternate offset mappings 
-    // for a particular offset as there are data segments in the executable. If there is no data segment,
-    // then probably this is tiny model (DS=CS) and there is still at least one data segment.
-    explicit OffsetMap(const Size maxData) : maxData(maxData > 0 ? maxData : 1) {}
-    OffsetMap() : maxData(0) {}
-    Address getCode(const Address &from) { return codeMap.count(from) ? codeMap[from] : Address{}; }
-    void setCode(const Address &from, const Address &to) { codeMap[from] = to; }
-    bool codeMatch(const Address from, const Address to);
-    bool dataMatch(const SOffset from, const SOffset to);
-    bool stackMatch(const SOffset from, const SOffset to);
-    void resetStack() { stackMap.clear(); }
-    void addSegment(const Segment &seg) { segments.push_back(seg); }
-
-private:
-    std::string dataStr(const MapSet &ms) const;
-};
+#include "../analysis/offsetmap.h"
 
 // TODO: compare instructions, not string representations, allow wildcards in place of arguments, e.g. "mov ax, *"
 class VariantMap {
@@ -149,3 +122,4 @@ private:
 };
 
 #endif // ANALYSIS_H
+

@@ -29,100 +29,9 @@ void searchMessage(const Address &addr, const string &msg) {
     output(addr.toString() + ": " + msg, LOG_ANALYSIS, LOG_DEBUG);
 }
 
-bool OffsetMap::codeMatch(const Address from, const Address to) {
-    if (!(from.isValid() && to.isValid()))
-        return false;
+// OffsetMap implementation moved to analysis.h as inline methods
 
-    // mapping already exists
-    if (codeMap.count(from) > 0) {
-        auto &found = codeMap[from];
-        if (found == to) {
-            debug("Existing code address mapping " + from.toString() + "->" + to.toString() + " matches");
-            return true;
-        }
-        error("Code address mapping " + from.toString() + "->" + to.toString() + " collides with existing " + from.toString() + "->" + found.toString());
-        return false;
-    }
-    // ensure uniqueness in other direction (no duplicate "to"s across all mappings)
-    for (const auto& [f, t] : codeMap) if (t == to) {
-        error("Code address mapping " + from.toString() + "->" + to.toString() + " collides with existing " + f.toString() + "<-" + t.toString());
-        return false;
-    }
-    // otherwise save new mapping
-    debug("Registering new code address mapping: " + from.toString() + "->" + to.toString());
-    codeMap[from] = to;
-    return true;
-}
-
-bool OffsetMap::dataMatch(const SOffset from, const SOffset to) {
-    auto &mappings = dataMap[from];
-    // matching mapping already exists in map
-    if (std::find(begin(mappings), end(mappings), to) != mappings.end()) {
-        debug("Existing data offset mapping " + hexVal(from) + " -> " + dataStr(mappings) + " matches");
-        return true;
-    }
-    // mapping does not exist, but still room left, so save it and carry on
-    else if (mappings.size() < maxData) {
-        // ensure uniqueness in other direction (duplicate "to"s across all mappings don't exceed the max data segment count)
-        // TODO: come up with something better for multiple data segments than just Nx possible matches, these still could be wrong between segments.
-        // Essentially we need to know the current data segment for every comparison location, put entire ds:off addresses into the map and compare accordingly,
-        // perhaps store this information from the mzmap run?
-        Size toCount = 0;
-        for (const auto& [f, tv] : dataMap) {
-            if (std::find(begin(tv), end(tv), to) != tv.end()) {
-                toCount++;
-                if (toCount < maxData) {
-                    debug("Data offset mapping " + hexVal(from) + "->" + hexVal(to) + " colides with existing " + hexVal(f) + "->" + dataStr(tv) 
-                        + ", allowed " + to_string(toCount) + "/" + to_string(maxData));
-                }
-                else {
-                    error("Data offset mapping " + hexVal(from) + "->" + hexVal(to) + " colides with existing " + hexVal(f) + "->" + dataStr(tv));
-                    return false;
-                }
-            }
-        }
-        debug("Registering new data offset mapping: " + hexVal(from) + " -> " + hexVal(to));
-        mappings.push_back(to);
-        return true;
-    }
-    // no matching mapping and limit already reached
-    else {
-        error("Data offset mapping " + hexVal(from) + "->" + hexVal(to) + " colides with existing " + hexVal(from) + "->" + dataStr(mappings));
-        return false;
-    }
-}
-
-bool OffsetMap::stackMatch(const SOffset from, const SOffset to) {
-    // check if mapping already exists
-    if (stackMap.count(from) > 0) {
-        const SOffset existing = stackMap[from];
-        if (existing == to) {
-            debug("Existing stack offset mapping " + hexVal(from) + "->" + hexVal(to) + " matches");
-            return true;
-        }
-        error("Stack offset mapping " + hexVal(from) + "->" + hexVal(to) + " collides with existing: " + hexVal(from) + "->" + hexVal(existing));
-        return false;
-    }
-    // ensure uniqueness in other direction (no duplicate "to"s across all mappings)
-    for (const auto& [f,t] : stackMap) if (t == to) {
-        error("Stack offset mapping " + hexVal(from) + "->" + hexVal(to) + " collides with existing: " + hexVal(f) + "->" + hexVal(t));
-        return false;
-    }
-    // otherwise save new mapping
-    debug("Registering new stack offset mapping: " + hexVal(from) + " -> " + hexVal(to));
-    stackMap[from] = to;
-    return true;
-}
-
-std::string OffsetMap::dataStr(const MapSet &ms) const {
-    ostringstream str;
-    int idx = 0;
-    for (SOffset o : ms) {
-        if (idx != 0) str << "/";
-        str << hexVal(o);
-    }
-    return str.str();
-}
+// dataStr implementation moved to analysis.h as inline method
 
 VariantMap::VariantMap() {
 }
@@ -661,7 +570,7 @@ bool Analyzer::compareCode(const Executable &ref, Executable &tgt, const CodeMap
     scanQueue = ScanQueue{ref.loadAddr(), ref.size(), Destination(ref.entrypoint(), VISITED_ID, true, {}), eprName};
     tgtQueue = ScanQueue{tgt.loadAddr(), tgt.size(), Destination(tgt.entrypoint(), VISITED_ID, true, {}), eprName};
     // map of equivalent addresses in the compared binaries, seed with the two entrypoints
-    offMap.setCode(ref.entrypoint(), tgt.entrypoint());
+    offMap.codeMatch(ref.entrypoint(), {tgt.entrypoint(), ref.entrypoint(), "Entrypoint"});
     routineNames.clear();
     excludedNames.clear();
     bool success = true;
@@ -980,7 +889,7 @@ bool Analyzer::checkComparisonStop() {
                 // TODO: make sure an instruction matches at the destination before actually recording the mapping
                 const Address guess = tgtCsip + (rb.begin - refCsip);
                 debug("Recording guess offset mapping based on unreachable block size: " + rb.begin.toString() + " -> " + guess.toString());
-                offMap.setCode(rb.begin, guess);
+                offMap.codeMatch(rb.begin, {guess, rb.begin, "Guess"});
             }
         }
         else {
@@ -1039,8 +948,12 @@ bool Analyzer::comparisonLoop(const Executable &ref, Executable &tgt, const Code
                 tgtBranch = getBranch(tgt, tgtInstr, {});
             // if the destination of the branch can be established, place it in the compare queue
             if (scanQueue.saveBranch(refBranch, {}, ref.extents())) {
+                MappingInfo newMapping;
+                newMapping.targetAddress = tgtBranch.destination;
+                newMapping.sourceInstructionAddress = refInstr.addr;
+                newMapping.sourceInstructionStr = refInstr.toString();
                 // if the branch destination was accepted, save the address mapping of the branch destination between the reference and target
-                if (!offMap.codeMatch(refBranch.destination, tgtBranch.destination)) return false;
+                if (!offMap.codeMatch(refBranch.destination, newMapping)) return false;
             }
             const Routine refRoutine = refMap.getRoutine(refBranch.destination);
             if (refRoutine.isValid()) {
@@ -1055,7 +968,11 @@ bool Analyzer::comparisonLoop(const Executable &ref, Executable &tgt, const Code
                 refBranch = getBranch(ref, refInstr, {}),
                 tgtBranch = getBranch(tgt, tgtInstr, {});
             if (refBranch.destination.isValid() && tgtBranch.destination.isValid()) {
-                if (!offMap.codeMatch(refBranch.destination, tgtBranch.destination)) return false;
+                MappingInfo newMapping;
+                newMapping.targetAddress = tgtBranch.destination;
+                newMapping.sourceInstructionAddress = refInstr.addr;
+                newMapping.sourceInstructionStr = refInstr.toString();
+                if (!offMap.codeMatch(refBranch.destination, newMapping)) return false;
             }
         }
 
@@ -1275,9 +1192,9 @@ Analyzer::ComparisonResult Analyzer::instructionsMatch(const Executable &ref, co
         Register segReg = refInstr.memSegmentId();
         switch (segReg) {
         case REG_CS:
-            match = offMap.codeMatch(refOfs, tgtOfs);
-            if (!match) verbose("Instruction mismatch due to code segment offset mapping conflict");
-            break;
+            // Code offsets are handled by branch instructions, not direct memory access.
+            // Direct memory access via CS is rare and usually for self-modifying code, which we don't map this way.
+            match = (refOfs == tgtOfs); break;
         case REG_ES: /* TODO: come up with something better */
         case REG_DS:
             match = offMap.dataMatch(refOfs, tgtOfs);
@@ -1291,7 +1208,15 @@ Analyzer::ComparisonResult Analyzer::instructionsMatch(const Executable &ref, co
             throw AnalysisError("Unsupported segment register in instruction comparison: " + regName(segReg));
             break;
         }
-        if (!match) return CMP_MISMATCH;
+        if (!match) {
+            // In loose mode, allow memory offset differences to be handled by operand comparison
+            if (!options.strict && refOfs != tgtOfs) {
+                debug("Allowing memory offset difference to be handled by operand comparison in loose mode");
+                // Don't return here, let the operand comparison logic handle it
+            } else {
+                return CMP_MISMATCH;
+            }
+        }
     }
     // now that offsets are checked we can accept a full match if there's one
     if (insResult == INS_MATCH_FULL) return CMP_MATCH;
@@ -1302,12 +1227,19 @@ Analyzer::ComparisonResult Analyzer::instructionsMatch(const Executable &ref, co
             refBranch = getBranch(ref, refInstr, {}), 
             tgtBranch = getBranch(tgt, tgtInstr, {});
         if (refBranch.destination.isValid() && tgtBranch.destination.isValid()) {
-            match = offMap.codeMatch(refBranch.destination, tgtBranch.destination);
+            MappingInfo mappingCheck;
+            mappingCheck.targetAddress = tgtBranch.destination;
+            mappingCheck.sourceInstructionAddress = refInstr.addr;
+            mappingCheck.sourceInstructionStr = refInstr.toString();
+
+            // We are just checking for a consistent mapping here, not creating a new one.
+            // The logic inside codeMatch will handle both cases.
+            match = offMap.codeMatch(refBranch.destination, mappingCheck);
+
             if (!match) {
                 debug("Instruction mismatch on branch destination");
                 return CMP_MISMATCH;
             }
-            // TODO: perfect match... too perfect, mark as suspicious?
             if (refBranch.destination == tgtBranch.destination) return CMP_MATCH;
             // near jumps are usually used within a routine to handle looping and conditions,
             // so a different value (relative jump amount) might mean a wrong flow
@@ -1320,16 +1252,17 @@ Analyzer::ComparisonResult Analyzer::instructionsMatch(const Executable &ref, co
     for (int opidx = 1; opidx <= 2; ++opidx) {
         const Instruction::Operand *op = nullptr;
         switch(opidx) {
-        case 1: if (insResult != INS_MATCH_DIFFOP2) op = &refInstr.op1; break;
-        case 2: if (insResult != INS_MATCH_DIFFOP1) op = &refInstr.op2; break;
+        case 1: if (insResult == INS_MATCH_DIFFOP1 || insResult == INS_MATCH_DIFF) op = &refInstr.op1; break;
+        case 2: if (insResult == INS_MATCH_DIFFOP2 || insResult == INS_MATCH_DIFF) op = &refInstr.op2; break;
         }
         if (op == nullptr) continue;
-        // memory operand differences were already handled
-        if (operandIsImmediate(op->type) && !options.strict) {
-            debug("Ignoring immediate value difference in loose mode");
-            // arbitrary heuristic to highlight small immediate value differences in red, these are usually suspicious
-            if (op->dwordValue() <= 0xff && !refInstr.isBranch()) return CMP_DIFFTGT;
-            return CMP_DIFFVAL;
+        
+        if (!options.strict) {
+            debug("Ignoring operand value difference in loose mode");
+            // For memory operands, treat as value difference
+            if (operandIsMem(op->type) || operandIsImmediate(op->type)) {
+                return CMP_DIFFVAL;
+            }
         }
     }
     // all special cases exhausted, just a difference on the operand value

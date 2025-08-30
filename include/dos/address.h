@@ -40,6 +40,8 @@ struct Address {
     Address(const std::string &str, const bool fixNormal = false);
     Address(const Address &other, const SWord displacement);
     Address() : Address(ADDR_INVALID, ADDR_INVALID) {}
+    
+    static const Address INVALID;
 
     bool operator==(const Address &arg) const { return toLinear() == arg.toLinear(); }
     bool operator!=(const Address &arg) const { return !(*this == arg); }
