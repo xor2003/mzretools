@@ -16,6 +16,7 @@ set(LIBDOS_SRC
     src/psp.cpp
     src/codemap.cpp
     src/analysis.cpp
+    src/analyzer.cpp
     src/executable.cpp
     src/routine.cpp
     src/scanq.cpp
@@ -27,7 +28,8 @@ set(LIBDOS_SRC
     src/instruction.cpp
     src/signature.cpp
     src/modrm.cpp
-    src/analysis/offsetmap.cpp)
+    src/analysis/offsetmap.cpp
+    src/variantmap.cpp)
 
 set(LIBDOS_HDR 
     include/dos/types.h
@@ -76,7 +78,11 @@ set(TEST_SRC
     test/cpu_test.cpp
     test/dos_test.cpp
     test/memory_test.cpp
-    test/analysis_test.cpp)
+    test/analysis_test.cpp
+    test/boundary_test.cpp
+    test/buffer_overflow_test.cpp
+    test/codemap_test.cpp
+    test/datarefs_test.cpp)
 
 # the test application executable
 add_executable(runtest ${TEST_SRC})

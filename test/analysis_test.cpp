@@ -27,10 +27,10 @@ protected:
     auto analyzerInstructionMatch(Analyzer &a, const Executable &ref, const Executable &tgt, const Instruction &refInstr, const Instruction &tgtInstr) { 
         return a.instructionsMatch(ref, tgt, refInstr, tgtInstr); 
     }
-    int analyzerMatch() { return static_cast<int>(Analyzer::CMP_MATCH); }
-    int analyzerDiffVal() { return static_cast<int>(Analyzer::CMP_DIFFVAL); }
-    int analyzerDiffTgt() { return static_cast<int>(Analyzer::CMP_DIFFTGT); }
-    int analyzerMismatch() { return static_cast<int>(Analyzer::CMP_MISMATCH); }
+    int analyzerMatch() { return static_cast<int>(ComparisonResult::CMP_MATCH); }
+    int analyzerDiffVal() { return static_cast<int>(ComparisonResult::CMP_DIFFVAL); }
+    int analyzerDiffTgt() { return static_cast<int>(ComparisonResult::CMP_DIFFTGT); }
+    int analyzerMismatch() { return static_cast<int>(ComparisonResult::CMP_MISMATCH); }
     bool crossCheck(const CodeMap &map1, const CodeMap &map2, const Size maxMiss) {
         TRACELN("Cross-checking map 1 (" + to_string(map1.routineCount()) + " routines) with map 2 (" + to_string(map2.routineCount()) + " routines)");
         Size missCount = 0;
@@ -569,7 +569,7 @@ TEST_F(AnalysisTest, DiffRegOffset) {
         i1{0, e1.codePointer(0)}, 
         i2{0, e2.codePointer(0)};
     Analyzer a(opt);
-    ASSERT_EQ(analyzerInstructionMatch(a, e1, e2, i1, i2), analyzerDiffVal());
+    ASSERT_EQ(static_cast<int>(analyzerInstructionMatch(a, e1, e2, i1, i2)), analyzerDiffVal());
 }
 
 TEST_F(AnalysisTest, DiffMemAndImm) {
@@ -587,7 +587,7 @@ TEST_F(AnalysisTest, DiffMemAndImm) {
         i1{0, e1.codePointer(0)}, 
         i2{0, e2.codePointer(0)};
     Analyzer a(opt);
-    ASSERT_EQ(analyzerInstructionMatch(a, e1, e2, i1, i2), analyzerDiffVal());
+    ASSERT_EQ(static_cast<int>(analyzerInstructionMatch(a, e1, e2, i1, i2)), analyzerDiffVal());
 }
 
 TEST_F(AnalysisTest, DiffImmLow) {
@@ -606,7 +606,7 @@ TEST_F(AnalysisTest, DiffImmLow) {
         i2{0, e2.codePointer(0)};
     Analyzer a(opt);
     // After OffsetMap changes, operand differences are detected as mismatch
-    ASSERT_EQ(analyzerInstructionMatch(a, e1, e2, i1, i2), analyzerMismatch());
+    ASSERT_EQ(static_cast<int>(analyzerInstructionMatch(a, e1, e2, i1, i2)), analyzerMismatch());
 }
 
 TEST_F(AnalysisTest, FindDuplicates) {

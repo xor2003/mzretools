@@ -16,6 +16,17 @@
 #include "dos/codemap.h"
 #include "dos/signature.h"
 
+// Declare helper functions for instruction application and comparison
+
+// Define ComparisonResult enum
+enum class ComparisonResult {
+    CMP_MATCH,      // instructions match exactly
+    CMP_MISMATCH,   // instructions do not match at all
+    CMP_DIFFVAL,    // instructions differ in immediate or memory value (but not offset)
+    CMP_DIFFTGT,    // instructions are jumps with different targets
+    CMP_VARIANT     // instructions are variants of each other
+};
+
 class Executable;
 
 // TODO: 
@@ -67,13 +78,7 @@ public:
             routineSizeThresh(15), routineDistanceThresh(10) {}
     };
 private:
-    enum ComparisonResult { 
-        CMP_MISMATCH,
-        CMP_MATCH,    // full literal or logical match
-        CMP_DIFFVAL,  // match with different immediate/offset value, might be allowed depending on options
-        CMP_DIFFTGT,  // match with different branch (near jump) target, might be allowed depending on options
-        CMP_VARIANT,  // match with a variant of an instruction or a sequence of instructions
-    } matchType;
+    ComparisonResult matchType;
 
     enum SkipType {
         SKIP_NONE,

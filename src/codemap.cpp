@@ -26,12 +26,37 @@ std::string Variable::toString(const bool brief) const {
 
 void CodeMap::blocksFromQueue(const ScanQueue &sq, const bool unclaimedOnly) {
     const Offset startOffset = SEG_TO_OFFSET(loadSegment);
-    Offset endOffset = startOffset + mapSize;
+    
+    // Prevent arithmetic overflow when calculating endOffset
+    Offset endOffset;
+    if (mapSize == 0 || startOffset > SIZE_MAX - mapSize) {
+        // Handle overflow case - limit to maximum safe value
+        endOffset = SIZE_MAX;
+        warn("Arithmetic overflow prevented in blocksFromQueue: startOffset=" +
+             hexVal(startOffset) + ", mapSize=" + sizeStr(mapSize));
+    } else {
+        endOffset = startOffset + mapSize;
+    }
+    
+    // Ensure we don't process beyond reasonable memory limits
+    const Offset maxSafeOffset = MEM_TOTAL;
+    if (endOffset > maxSafeOffset) {
+        endOffset = maxSafeOffset;
+        debug("End offset limited to maximum memory: " + hexVal(endOffset));
+    }
+    
     Block b(startOffset);
     prevId = curBlockId = prevBlockId = NULL_ROUTINE;
     Segment curSeg;
 
     debug("Starting at " + hexVal(startOffset) + ", ending at " + hexVal(endOffset) + ", map size: " + sizeStr(mapSize));
+    
+    // Use safe loop bounds to prevent infinite loops
+    if (startOffset >= endOffset) {
+        debug("Invalid range, skipping processing");
+        return;
+    }
+    
     for (Offset mapOffset = startOffset; mapOffset < endOffset; ++mapOffset) {
         curId = sq.getRoutineIdx(mapOffset);
         // find segment matching currently processed offset
@@ -552,7 +577,16 @@ Segment CodeMap::findSegment(const Offset off, const bool past) const {
         // in this mode, find any segment that's past the argument offset
         if (past && segOff > off) return s;
         // otherwise, update the segment and continue
-        if (segOff <= off && off - segOff <= OFFSET_MAX) ret = s;
+        // Prevent arithmetic overflow in segment size calculation
+        if (segOff <= off) {
+            // Check for overflow before addition
+            if (segOff > SIZE_MAX - (OFFSET_MAX + 1)) {
+                // Handle overflow case - segment extends to maximum address
+                ret = s;
+            } else if (off < segOff + (OFFSET_MAX + 1)) {
+                ret = s;
+            }
+        }
     }
     return ret;
 }
