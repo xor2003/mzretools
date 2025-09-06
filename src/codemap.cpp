@@ -45,6 +45,12 @@ void CodeMap::blocksFromQueue(const ScanQueue &sq, const bool unclaimedOnly) {
         debug("End offset limited to maximum memory: " + hexVal(endOffset));
     }
     
+    // Additional safety check for extremely large ranges
+    if (endOffset - startOffset > MEM_TOTAL) {
+        warn("Range too large, limiting to maximum memory: " + hexVal(startOffset) + " to " + hexVal(startOffset + MEM_TOTAL));
+        endOffset = startOffset + MEM_TOTAL;
+    }
+    
     Block b(startOffset);
     prevId = curBlockId = prevBlockId = NULL_ROUTINE;
     Segment curSeg;
@@ -57,12 +63,21 @@ void CodeMap::blocksFromQueue(const ScanQueue &sq, const bool unclaimedOnly) {
         return;
     }
     
+    // Prevent potential infinite loops by checking for reasonable step size
+    const Offset maxIterations = MEM_TOTAL;
+    Offset iterationCount = 0;
+    
     for (Offset mapOffset = startOffset; mapOffset < endOffset; ++mapOffset) {
+        // Safety check to prevent infinite loops
+        if (++iterationCount > maxIterations) {
+            error("Maximum iteration count exceeded, breaking loop to prevent infinite execution");
+            break;
+        }
         curId = sq.getRoutineIdx(mapOffset);
         // find segment matching currently processed offset
         Segment newSeg = findSegment(mapOffset);
         if (newSeg.type == Segment::SEG_NONE) {
-            warn("Unable to find segment for offset " + hexVal(mapOffset) + " while generating code map");
+            warn("Unable to find segment for offset " + hexVal(mapOffset) + " while generating code map, implies a hole in the segment table");
             // attempt to find any segment past the offset, ignore the area in between
             newSeg = findSegment(mapOffset, true);
             if (newSeg.type == Segment::SEG_NONE) {
@@ -73,7 +88,13 @@ void CodeMap::blocksFromQueue(const ScanQueue &sq, const bool unclaimedOnly) {
             debug("Skipping to next segment: " + newSeg.toString() + ", offset " + hexVal(mapOffset) + ", forcing close of block " + b.toString());
             closeBlock(b, Address{mapOffset}, sq, unclaimedOnly);
             b = Block{};
-            mapOffset = SEG_TO_OFFSET(newSeg.address);
+            // Safety check to prevent infinite loop when segment address is invalid
+            const Offset newSegOffset = SEG_TO_OFFSET(newSeg.address);
+            if (newSegOffset <= mapOffset) {
+                warn("Segment offset not advancing, breaking to prevent infinite loop");
+                break;
+            }
+            mapOffset = newSegOffset;
         }
         if (newSeg != curSeg) {
             curSeg = newSeg;
@@ -182,6 +203,12 @@ Routine CodeMap::getRoutine(const std::string &name) const {
 Routine& CodeMap::getMutableRoutine(const std::string &name) {
     for (Routine &r : routines)
         if (r.name == name) return r;
+    
+    // Safety check to prevent excessive memory growth
+    if (routines.size() >= MAX_ROUTINES) {
+        throw AnalysisError("Maximum number of routines exceeded: " + to_string(routines.size()));
+    }
+    
     return routines.emplace_back(Routine(name, {}));
 }
 
@@ -250,9 +277,16 @@ Routine CodeMap::colidesBlock(const Block &b) const {
 void CodeMap::closeBlock(Block &b, const Address &next, const ScanQueue &sq, const bool unclaimedOnly) {
     if (!b.isValid() || next == b.begin) return;
 
-    b.end = Address{next.toLinear() - 1};
+    // Safety check to prevent underflow when calculating end address
+    const Offset nextLinear = next.toLinear();
+    if (nextLinear == 0) {
+        warn("Attempted to close block at offset 0, skipping");
+        return;
+    }
+    
+    b.end = Address{nextLinear - 1};
     b.end.move(b.begin.segment);
-    debug(next.toString() + ": closing block " + b.toString() + ", curId = " + to_string(curId) + ", prevId = " + to_string(prevId) 
+    debug(next.toString() + ": closing block " + b.toString() + ", curId = " + to_string(curId) + ", prevId = " + to_string(prevId)
         + ", curBlockId = " + to_string(curBlockId) + ", prevBlockId = " + to_string(prevBlockId));
 
     if (!b.isValid())

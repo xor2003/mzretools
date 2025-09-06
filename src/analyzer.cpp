@@ -168,8 +168,6 @@ static void applyPop(const Instruction &i, CpuState &regs, Executable &exe) {
     }
 }
 
-// TODO: include information of existing address mapping contributing to a match/mismatch in the output
-// TODO: make jump instructions compare the match with the relative offset value
 static string compareStatus(const Instruction &i1, const Instruction &i2, const bool align, InstructionMatch match = INS_MATCH_ERROR) {
     static const int ALIGN = 50;
     ostringstream status;
@@ -194,19 +192,24 @@ static string compareStatus(const Instruction &i1, const Instruction &i2, const 
         case INS_MATCH_DIFF:     status << " ~~ "; break;
         case INS_MATCH_DIFFOP1:  status << " ~= "; break;
         case INS_MATCH_DIFFOP2:  status << " =~ "; break;
-        case INS_MATCH_MISMATCH: status << " != "; break; 
+        case INS_MATCH_MISMATCH: status << " != "; break;
     }
 
     status << i2.addr.toString() + ": " + i2.toString(true);
     
-    // Add AI-specific comments for differences
-    if (match == INS_MATCH_DIFFOP1 || match == INS_MATCH_DIFFOP2) {
-        status << " #AI: type=\"immediate\" op=\"" << (match == INS_MATCH_DIFFOP1 ? "1" : "2") 
-               << "\" ref=\"" << hexVal(i1.op2.wordValue()) << "\" tgt=\"" << hexVal(i2.op2.wordValue()) << "\"";
+    // Add natural language explanations for differences
+    if (match == INS_MATCH_DIFFOP1) {
+        status << " // Immediate operand1: ref=" << hexVal(i1.op1.wordValue())
+               << " vs tgt=" << hexVal(i2.op1.wordValue());
+    } else if (match == INS_MATCH_DIFFOP2) {
+        status << " // Immediate operand2: ref=" << hexVal(i1.op2.wordValue())
+               << " vs tgt=" << hexVal(i2.op2.wordValue());
     } else if (match == INS_MATCH_DIFF) {
-        status << " #AI: type=\"memory_offset\" map=\"" << hexVal(i1.memOffset()) << "->" << hexVal(i2.memOffset()) << "\"";
+        status << " // Memory offset: ref=" << hexVal(i1.memOffset())
+               << " vs tgt=" << hexVal(i2.memOffset());
     } else if (match == INS_MATCH_MISMATCH) {
-        status << " #AI: type=\"opcode\" ref=\"" << hexVal(i1.opcode) << "\" tgt=\"" << hexVal(i2.opcode) << "\"";
+        status << " // Opcode: ref=" << hexVal(i1.opcode)
+               << " vs tgt=" << hexVal(i2.opcode);
     }
 
     return status.str();
@@ -605,7 +608,18 @@ bool Analyzer::compareCode(const Executable &ref, Executable &tgt, const CodeMap
         verbose(output_color(OUT_GREEN) + "Comparison result: match" + output_color(OUT_DEFAULT));
         comparisonSummary(ref, refMap, true);
     }
-    else verbose(output_color(OUT_RED) + "Comparison result: mismatch" + output_color(OUT_DEFAULT));
+    else {
+        ostringstream oss;
+        oss << "Comparison result: ";
+
+        if (missedNames.size() > 0) {
+            oss << "mismatch (" << missedNames.size() << " missed routines)";
+        } else {
+            oss << "differences found (no missed routines)";
+        }
+        
+        verbose(output_color(OUT_YELLOW) + oss.str() + output_color(OUT_DEFAULT));
+    }
     return success;
 }
 
@@ -703,8 +717,8 @@ bool Analyzer::compareData(const Executable &ref, const Executable &tgt, const C
         if (!options.extData && before.addr.isValid() && before.external) {
             verbose("Variable " + before.toString() + " marked external, ignoring mismatch");
             continue;
-        }        
-        verbose("Comparison result: mismatch", OUT_RED);
+        }
+        verbose("Comparison result: mismatch in data segment " + segment, OUT_RED);
         return false;
     }
     verbose("Comparison result: match", OUT_GREEN);
