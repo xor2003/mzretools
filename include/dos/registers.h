@@ -58,7 +58,7 @@ public:
         if (val) reg(REG_FLAGS) |= flag; 
         else reg(REG_FLAGS) &= ~flag; 
     }
-    inline Address csip() const { return { values[REG_CS], values[REG_IP]}; }
+    inline Address csip() const { return { reg(REG_CS), reg(REG_IP) }; }
     std::string dump() const;
     void reset();
 private:
