@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# This script invokes development binaries (compiler, linker, assembler) in DOSBox.
+# This script invokes development binaries (compiler, linker, assembler) in a DOS emulator.
 #
 # TODO: 
 # - linking can be simplified by using CL instead of LINK
@@ -17,6 +17,11 @@ cmdline=$@
 DOSBOX_BIN=${DOSBOX_BIN:-}
 DOSBOX_EXTRA_ARGS=${DOSBOX_EXTRA_ARGS:-}
 DOSBOX_TIMEOUT=${DOSBOX_TIMEOUT:-120}
+KVIKDOS_BIN=${KVIKDOS_BIN:-}
+MSDOS_PLAYER_BIN=${MSDOS_PLAYER_BIN:-}
+MSDOS_USE_WINE=${MSDOS_USE_WINE:-1}
+EMU_BACKEND=${EMU_BACKEND:-}
+EMU_TIMEOUT=${EMU_TIMEOUT:-$DOSBOX_TIMEOUT}
 
 function syntax() {
     [ "$1" ] && echo "Error: $1"
@@ -67,19 +72,78 @@ function print_log_artifacts() {
     [ -f "$meta_log" ] && echo "meta: $meta_log"
 }
 
-function run_dosbox() {
-    local emu_log=$1
-    local mode=$2
-    shift 2
-    if [ "$mode" = "staging" ]; then
-        timeout --foreground "${DOSBOX_TIMEOUT}s" env SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy "$@" &> "$emu_log"
-    else
-        timeout --foreground "${DOSBOX_TIMEOUT}s" env SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy "$@" &> "$emu_log"
+function host_os() {
+    case "$(uname -s)" in
+        Linux*) echo "linux" ;;
+        CYGWIN*|MINGW*|MSYS*) echo "windows" ;;
+        *) echo "other" ;;
+    esac
+}
+
+function resolve_default_emulator() {
+    local os=$1
+    local root_dir
+    root_dir="$(cd "$(dirname "$0")/.." && pwd)"
+    if [ -z "$KVIKDOS_BIN" ] && [ -x "$root_dir/tools/emulators/kvikdos" ]; then
+        KVIKDOS_BIN="$root_dir/tools/emulators/kvikdos"
     fi
+    if [ -z "$MSDOS_PLAYER_BIN" ] && [ -f "$root_dir/tools/emulators/msdos.exe" ]; then
+        MSDOS_PLAYER_BIN="$root_dir/tools/emulators/msdos.exe"
+    fi
+    if [ -z "$KVIKDOS_BIN" ] && [ -x /home/xor/kvikdos/kvikdos ]; then
+        KVIKDOS_BIN=/home/xor/kvikdos/kvikdos
+    fi
+    if [ -z "$MSDOS_PLAYER_BIN" ] && [ -f /home/xor/kvikdos/msdos.exe ]; then
+        MSDOS_PLAYER_BIN=/home/xor/kvikdos/msdos.exe
+    fi
+    if [ -z "$DOSBOX_BIN" ]; then
+        if command -v dosbox >/dev/null 2>&1; then
+            DOSBOX_BIN=$(command -v dosbox)
+        elif [ -x /opt/dosbox-staging/dosbox ]; then
+            DOSBOX_BIN=/opt/dosbox-staging/dosbox
+        fi
+    fi
+
+    if [ -z "$EMU_BACKEND" ]; then
+        if [ "$os" = "linux" ] && [ -x "$KVIKDOS_BIN" ]; then
+            EMU_BACKEND="kvikdos"
+        elif [ "$os" = "windows" ] && [ -f "$MSDOS_PLAYER_BIN" ]; then
+            EMU_BACKEND="msdos"
+        elif [ -n "$DOSBOX_BIN" ]; then
+            EMU_BACKEND="dosbox"
+        elif [ -x "$KVIKDOS_BIN" ]; then
+            EMU_BACKEND="kvikdos"
+        elif [ -f "$MSDOS_PLAYER_BIN" ]; then
+            EMU_BACKEND="msdos"
+        else
+            EMU_BACKEND="dosbox"
+        fi
+    fi
+}
+
+function run_emulator() {
+    local emu_log=$1
+    local backend=$2
+    shift 2
+    case "$backend" in
+        dosbox)
+            timeout --foreground "${EMU_TIMEOUT}s" env SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy "$@" &> "$emu_log"
+            ;;
+        kvikdos)
+            timeout --foreground "${EMU_TIMEOUT}s" "$@" &> "$emu_log"
+            ;;
+        msdos)
+            timeout --foreground "${EMU_TIMEOUT}s" "$@" &> "$emu_log"
+            ;;
+        *)
+            echo "unknown emulator backend: $backend" > "$emu_log"
+            return 127
+            ;;
+    esac
     return $?
 }
 
-function classify_dosbox_failure() {
+function classify_emulator_failure() {
     local exit_code=$1
     local emu_log=$2
     if (( exit_code == 124 )); then
@@ -112,19 +176,26 @@ function classify_dosbox_failure() {
     fi
     echo "unknown"
 }
-
-if [ -z "$DOSBOX_BIN" ]; then
-    if command -v dosbox >/dev/null 2>&1; then
-        DOSBOX_BIN=$(command -v dosbox)
-    elif [ -x /opt/dosbox-staging/dosbox ]; then
-        DOSBOX_BIN=/opt/dosbox-staging/dosbox
-    else
-        DOSBOX_BIN=
-    fi
-fi
-[ -n "$DOSBOX_BIN" ] || fatal "Dosbox not installed"
-[ -x "$DOSBOX_BIN" ] || fatal "Configured DOSBox binary is not executable: $DOSBOX_BIN"
-[ -f "$CONF_FILE" ] || fatal "Dosbox configuration file does not exist: $CONF_FILE"
+HOST_OS="$(host_os)"
+resolve_default_emulator "$HOST_OS"
+case "$EMU_BACKEND" in
+    dosbox)
+        [ -n "$DOSBOX_BIN" ] || fatal "Dosbox not installed"
+        [ -x "$DOSBOX_BIN" ] || fatal "Configured DOSBox binary is not executable: $DOSBOX_BIN"
+        [ -f "$CONF_FILE" ] || fatal "Dosbox configuration file does not exist: $CONF_FILE"
+        ;;
+    kvikdos)
+        [ -n "$KVIKDOS_BIN" ] || fatal "kvikdos binary not configured"
+        [ -x "$KVIKDOS_BIN" ] || fatal "Configured kvikdos binary is not executable: $KVIKDOS_BIN"
+        ;;
+    msdos)
+        [ -n "$MSDOS_PLAYER_BIN" ] || fatal "MS-DOS Player binary not configured"
+        [ -f "$MSDOS_PLAYER_BIN" ] || fatal "Configured MS-DOS Player binary does not exist: $MSDOS_PLAYER_BIN"
+        ;;
+    *)
+        fatal "Unsupported EMU_BACKEND '$EMU_BACKEND' (use: kvikdos|msdos|dosbox)"
+        ;;
+esac
 
 # extract tool name (compiler/linker/assembler) and toolchain from cmdline
 tool=$1
@@ -382,6 +453,7 @@ debug "cmdline: $cmdline"
 #echo "--- build running $tool from $chain"
 # create dos bat file for launching inside the emulator
 
+if [ "$EMU_BACKEND" = "dosbox" ]; then
 cat > $BAT_FILE <<EOF
 set PATH=Z:\;C:\\$chain\\bin;C:\\$chain\binb;C:\\$chain\bound;C:\\$chain
 set INCLUDE=C:\\$chain\\include
@@ -392,6 +464,14 @@ mount c "$(dirname "$tool_exe")/../"
 d:
 $cmdline > LOG.TXT
 EOF
+else
+cat > $BAT_FILE <<EOF
+set PATH=C:\\$chain\\bin;C:\\$chain\binb;C:\\$chain\bound;C:\\$chain
+set INCLUDE=C:\\$chain\\include
+set LIB=C:\\$chain\\lib
+$cmdline > LOG.TXT
+EOF
+fi
 
 if ((DEBUG)); then 
     echo "--- $BAT_FILE"
@@ -431,11 +511,15 @@ echo "cwd=$(pwd)"
     echo "infile_dir=$infile_dir"
     [ "$outfile" ] && echo "outfile=$outfile"
     echo "cmdline=$cmdline"
+    echo "emulator_backend=$EMU_BACKEND"
+    echo "host_os=$HOST_OS"
     echo "dosbox_bin=$DOSBOX_BIN"
+    echo "kvikdos_bin=$KVIKDOS_BIN"
+    echo "msdos_player_bin=$MSDOS_PLAYER_BIN"
     echo "start_epoch=$(date +%s)"
 } > "$artifact_meta"
 
-if [[ "$DOSBOX_BIN" == *dosbox-staging* ]]; then
+if [ "$EMU_BACKEND" = "dosbox" ] && [[ "$DOSBOX_BIN" == *dosbox-staging* ]]; then
     cat > "$runtime_conf" <<EOF
 [sdl]
 output=surface
@@ -461,38 +545,58 @@ EOF
 fi
 # start bat file in emulator in headless mode
 [ "$tool" != "test" ] && echo "$cmdline"
-if [[ "$DOSBOX_BIN" == *dosbox-staging* ]]; then
-    dosbox_args=(--noprimaryconf --nolocalconf -conf "$runtime_conf" --set output=surface --set waitonerror=false)
-else
-    dosbox_args=(-conf "$CONF_FILE")
+if [ "$EMU_BACKEND" = "dosbox" ]; then
+    if [[ "$DOSBOX_BIN" == *dosbox-staging* ]]; then
+        emu_args=(--noprimaryconf --nolocalconf -conf "$runtime_conf" --set output=surface --set waitonerror=false)
+    else
+        emu_args=(-conf "$CONF_FILE")
+    fi
+    if [ -n "$DOSBOX_EXTRA_ARGS" ]; then
+        # shellcheck disable=SC2206
+        extra_args=($DOSBOX_EXTRA_ARGS)
+        emu_args+=("${extra_args[@]}")
+    fi
+    emu_args+=("$BAT_FILE" -exit 24)
+    run_emulator "$emu_logfile" "$EMU_BACKEND" "$DOSBOX_BIN" "${emu_args[@]}"
+elif [ "$EMU_BACKEND" = "kvikdos" ]; then
+    emu_tool_root="$(pwd)/dos/$chain"
+    if [ -n "$tool_exe" ]; then
+        emu_tool_root="$(dirname "$tool_exe")/../"
+    fi
+    kvikdos_args=(
+        "--mount=c:$emu_tool_root"
+        "--mount=d:$infile_dir/"
+        "--mount=e:$outfile_dir/"
+        "--drive=d"
+        "--cwd-dos=D:\\"
+        "--prog=D:\\$(basename "$BAT_FILE")"
+    )
+    run_emulator "$emu_logfile" "$EMU_BACKEND" "$KVIKDOS_BIN" "${kvikdos_args[@]}" "$BAT_FILE"
+elif [ "$EMU_BACKEND" = "msdos" ]; then
+    if [ "$HOST_OS" = "linux" ] && [ "$MSDOS_USE_WINE" = "1" ]; then
+        run_emulator "$emu_logfile" "$EMU_BACKEND" wine "$MSDOS_PLAYER_BIN" "$BAT_FILE"
+    else
+        run_emulator "$emu_logfile" "$EMU_BACKEND" "$MSDOS_PLAYER_BIN" "$BAT_FILE"
+    fi
 fi
-if [ -n "$DOSBOX_EXTRA_ARGS" ]; then
-    # shellcheck disable=SC2206
-    extra_args=($DOSBOX_EXTRA_ARGS)
-    dosbox_args+=("${extra_args[@]}")
-fi
-dosbox_args+=("$BAT_FILE" -exit 24)
-dosbox_mode="classic"
-[[ "$DOSBOX_BIN" == *dosbox-staging* ]] && dosbox_mode="staging"
-run_dosbox "$emu_logfile" "$dosbox_mode" "$DOSBOX_BIN" "${dosbox_args[@]}"
-dosbox_exit=$?
-dosbox_failure=$(classify_dosbox_failure "$dosbox_exit" "$emu_logfile")
+emu_exit=$?
+emu_failure=$(classify_emulator_failure "$emu_exit" "$emu_logfile")
 [ -f "$logfile" ] && cp "$logfile" "$artifact_dos_log"
 [ -f "$emu_logfile" ] && cp "$emu_logfile" "$artifact_emu_log"
-if (( dosbox_exit != 0 )); then
-    echo "dosbox_failure=$dosbox_failure" >> "$artifact_meta"
-    echo "dosbox_exit=$dosbox_exit" >> "$artifact_meta"
-    if [ "$dosbox_failure" = "timeout" ]; then
-        echo "Error: DOSBox timed out after ${DOSBOX_TIMEOUT}s"
+if (( emu_exit != 0 )); then
+    echo "emulator_failure=$emu_failure" >> "$artifact_meta"
+    echo "emulator_exit=$emu_exit" >> "$artifact_meta"
+    if [ "$emu_failure" = "timeout" ]; then
+        echo "Error: emulator timed out after ${EMU_TIMEOUT}s"
     else
-        echo "Error: DOSBox failed ($dosbox_failure)"
+        echo "Error: emulator failed ($emu_failure)"
     fi
-    echo "DOSBox exited with error code: $dosbox_exit"
+    echo "Emulator exited with error code: $emu_exit"
     print_log_artifacts "$artifact_dos_log" "$artifact_emu_log" "$artifact_bat" "$artifact_meta"
-    exit $dosbox_exit
+    exit $emu_exit
 fi
-echo "dosbox_failure=none" >> "$artifact_meta"
-echo "dosbox_exit=0" >> "$artifact_meta"
+echo "emulator_failure=none" >> "$artifact_meta"
+echo "emulator_exit=0" >> "$artifact_meta"
 
 # check if successful by examining if output file exists (case-insensitive check)
 if [ "$tool" != "test" ]; then
