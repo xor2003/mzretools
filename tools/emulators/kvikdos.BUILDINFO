@@ -1,0 +1,5 @@
+source_repo=/home/xor/kvikdos
+source_commit=3b265965e4e04d509a71c6aa1cc38092c1f13e57
+build_cmd=make -j
+built_binary=/home/xor/kvikdos/kvikdos
+sha256=bf3b28e202664ebebe14ea0aaa6cf15e00a442dd401a4fa8d3998276e0179782
