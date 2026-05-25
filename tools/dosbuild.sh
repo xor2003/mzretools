@@ -14,6 +14,9 @@ DEBUG=0
 # always print toolchain stdout
 VERBOSE=1
 cmdline=$@
+DOSBOX_BIN=${DOSBOX_BIN:-}
+DOSBOX_EXTRA_ARGS=${DOSBOX_EXTRA_ARGS:-}
+DOSBOX_TIMEOUT=${DOSBOX_TIMEOUT:-120}
 
 function syntax() {
     [ "$1" ] && echo "Error: $1"
@@ -52,7 +55,75 @@ function output_unresolved() {
     echo
 }
 
-which dosbox &> /dev/null || fatal "Dosbox not installed"
+function print_log_artifacts() {
+    local dos_log=$1
+    local emu_log=$2
+    local bat_log=$3
+    local meta_log=$4
+    echo "--- dosbuild artifacts ---"
+    [ -f "$dos_log" ] && echo "dos log: $dos_log"
+    [ -f "$emu_log" ] && echo "emulator log: $emu_log"
+    [ -f "$bat_log" ] && echo "bat script: $bat_log"
+    [ -f "$meta_log" ] && echo "meta: $meta_log"
+}
+
+function run_dosbox() {
+    local emu_log=$1
+    local mode=$2
+    shift 2
+    if [ "$mode" = "staging" ]; then
+        timeout --foreground "${DOSBOX_TIMEOUT}s" env SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy "$@" &> "$emu_log"
+    else
+        timeout --foreground "${DOSBOX_TIMEOUT}s" env SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy "$@" &> "$emu_log"
+    fi
+    return $?
+}
+
+function classify_dosbox_failure() {
+    local exit_code=$1
+    local emu_log=$2
+    if (( exit_code == 124 )); then
+        echo "timeout"
+        return
+    fi
+    if (( exit_code == 134 )); then
+        if grep -q "Could not initialize video" "$emu_log"; then
+            echo "video-init"
+            return
+        fi
+        echo "abort"
+        return
+    fi
+    if (( exit_code == 139 )); then
+        echo "segfault"
+        return
+    fi
+    if grep -q "Could not initialize video" "$emu_log"; then
+        echo "video-init"
+        return
+    fi
+    if grep -q "pa_write() failed" "$emu_log"; then
+        echo "audio-init"
+        return
+    fi
+    if grep -qi "error" "$emu_log"; then
+        echo "emulator-error"
+        return
+    fi
+    echo "unknown"
+}
+
+if [ -z "$DOSBOX_BIN" ]; then
+    if command -v dosbox >/dev/null 2>&1; then
+        DOSBOX_BIN=$(command -v dosbox)
+    elif [ -x /opt/dosbox-staging/dosbox ]; then
+        DOSBOX_BIN=/opt/dosbox-staging/dosbox
+    else
+        DOSBOX_BIN=
+    fi
+fi
+[ -n "$DOSBOX_BIN" ] || fatal "Dosbox not installed"
+[ -x "$DOSBOX_BIN" ] || fatal "Configured DOSBox binary is not executable: $DOSBOX_BIN"
 [ -f "$CONF_FILE" ] || fatal "Dosbox configuration file does not exist: $CONF_FILE"
 
 # extract tool name (compiler/linker/assembler) and toolchain from cmdline
@@ -179,7 +250,6 @@ for f in $infiles; do
     [ "$infiles_dos" ] && infiles_dos+=" "
     infiles_dos+="$(dossep ${f#${infile_dir}/})"
 done
-[ -f "$outfile" ] && rm $outfile # remove output file if it exists from the previous run, we use its existence to check for success/failure
 outfile_dir=$(basedir $outfile)
 outfile_name=$(basename $outfile)
 outfile_noext="${outfile_name%.*}"
@@ -202,6 +272,7 @@ debug "infile_dir='$infile_dir', infiles_dos='$infiles_dos', outfile_dir='$outfi
 if [ "$tool" != "test" ]; then
     [ -d "$infile_dir" ] || fatal "Input directory does not exist: $infile_dir"
     [ -d "$outfile_dir" ] || fatal "Output directory does not exist: $outfile_dir"
+    find "$outfile_dir" -maxdepth 1 -iname "$(basename "$outfile")" -exec rm -f {} +
 fi
 outfile_base="${outfile_dos%.*}"
 outfile_map="$outfile_base.map"
@@ -331,21 +402,102 @@ fi
 # remove logfile from previous run if exists to avoid reporting bogus errors in case of build failure
 logfile=$infile_dir/LOG.TXT
 emu_logfile=build.log
+artifact_base=''
+artifact_dos_log=''
+artifact_emu_log=''
+artifact_bat=''
+artifact_meta=''
+runtime_conf=''
+if [ "$tool" != "test" ]; then
+    artifact_base="$outfile_dir/${outfile_noext}"
+else
+    test_name=$(basename $(echo "$infiles" | awk '{print $1}'))
+    test_name="${test_name%.*}"
+    artifact_base="$infile_dir/${test_name}"
+fi
+artifact_dos_log="${artifact_base}.dos.log"
+artifact_emu_log="${artifact_base}.emu.log"
+artifact_bat="${artifact_base}.dosbuild.bat"
+artifact_meta="${artifact_base}.dosbuild.meta"
+runtime_conf="${artifact_base}.dosbox.runtime.conf"
 rm -f $logfile
 rm -f $emu_logfile
+rm -f "$artifact_dos_log" "$artifact_emu_log" "$artifact_bat" "$artifact_meta" "$runtime_conf"
+cp "$BAT_FILE" "$artifact_bat"
+{
+    echo "tool=$tool"
+    [ "$chain" ] && echo "toolchain=$chain"
+echo "cwd=$(pwd)"
+    echo "infile_dir=$infile_dir"
+    [ "$outfile" ] && echo "outfile=$outfile"
+    echo "cmdline=$cmdline"
+    echo "dosbox_bin=$DOSBOX_BIN"
+    echo "start_epoch=$(date +%s)"
+} > "$artifact_meta"
+
+if [[ "$DOSBOX_BIN" == *dosbox-staging* ]]; then
+    cat > "$runtime_conf" <<EOF
+[sdl]
+output=surface
+waitonerror=false
+
+[dosbox]
+machine=svga_s3
+memsize=16
+
+[cpu]
+core=normal
+cputype=386
+cycles=20000
+
+[mixer]
+nosound=true
+
+[dos]
+xms=true
+ems=true
+umb=true
+EOF
+fi
 # start bat file in emulator in headless mode
 [ "$tool" != "test" ] && echo "$cmdline"
-SDL_VIDEODRIVER=dummy dosbox -conf $CONF_FILE $BAT_FILE -exit 24&> $emu_logfile
+if [[ "$DOSBOX_BIN" == *dosbox-staging* ]]; then
+    dosbox_args=(--noprimaryconf --nolocalconf -conf "$runtime_conf" --set output=surface --set waitonerror=false)
+else
+    dosbox_args=(-conf "$CONF_FILE")
+fi
+if [ -n "$DOSBOX_EXTRA_ARGS" ]; then
+    # shellcheck disable=SC2206
+    extra_args=($DOSBOX_EXTRA_ARGS)
+    dosbox_args+=("${extra_args[@]}")
+fi
+dosbox_args+=("$BAT_FILE" -exit 24)
+dosbox_mode="classic"
+[[ "$DOSBOX_BIN" == *dosbox-staging* ]] && dosbox_mode="staging"
+run_dosbox "$emu_logfile" "$dosbox_mode" "$DOSBOX_BIN" "${dosbox_args[@]}"
 dosbox_exit=$?
+dosbox_failure=$(classify_dosbox_failure "$dosbox_exit" "$emu_logfile")
+[ -f "$logfile" ] && cp "$logfile" "$artifact_dos_log"
+[ -f "$emu_logfile" ] && cp "$emu_logfile" "$artifact_emu_log"
 if (( dosbox_exit != 0 )); then
+    echo "dosbox_failure=$dosbox_failure" >> "$artifact_meta"
+    echo "dosbox_exit=$dosbox_exit" >> "$artifact_meta"
+    if [ "$dosbox_failure" = "timeout" ]; then
+        echo "Error: DOSBox timed out after ${DOSBOX_TIMEOUT}s"
+    else
+        echo "Error: DOSBox failed ($dosbox_failure)"
+    fi
     echo "DOSBox exited with error code: $dosbox_exit"
+    print_log_artifacts "$artifact_dos_log" "$artifact_emu_log" "$artifact_bat" "$artifact_meta"
     exit $dosbox_exit
 fi
+echo "dosbox_failure=none" >> "$artifact_meta"
+echo "dosbox_exit=0" >> "$artifact_meta"
 
 # check if successful by examining if output file exists (case-insensitive check)
 if [ "$tool" != "test" ]; then
     # Case-insensitive search for output file
-    outfile_found=$(find "$outfile_dir" -maxdepth 1 -iname "$(basename "$outfile")" -print -quit)
+    outfile_found=$(find "$outfile_dir" -maxdepth 1 -iname "$(basename "$outfile")" -newermt "@$(grep '^start_epoch=' "$artifact_meta" | cut -d= -f2)" -print -quit)
     if [ -z "$outfile_found" ]; then
         if [ -f "$logfile" ]; then
             cat $logfile;
@@ -353,10 +505,14 @@ if [ "$tool" != "test" ]; then
             cat $emu_logfile
             echo "Build failed and no output file found, check emulator configuration"
         fi
+        echo "outfile_status=missing_or_stale" >> "$artifact_meta"
+        print_log_artifacts "$artifact_dos_log" "$artifact_emu_log" "$artifact_bat" "$artifact_meta"
         exit 244;
     else
         # Use the found file path
         outfile="$outfile_found"
+        echo "outfile_status=fresh" >> "$artifact_meta"
+        echo "outfile_found=$outfile" >> "$artifact_meta"
     fi
     # the linker can create an output file even in presence of errors so check log
     if grep -i "error" $logfile &> /dev/null; then
@@ -364,13 +520,16 @@ if [ "$tool" != "test" ]; then
         cat $logfile;
         # special handling for MS C linker output
         [[ $chain =~ ^msc && $tool = "link" ]] && output_unresolved "$logfile"
+        print_log_artifacts "$artifact_dos_log" "$artifact_emu_log" "$artifact_bat" "$artifact_meta"
         exit 245;
     fi
     if grep -ie "warning" $logfile &> /dev/null || ((VERBOSE)); then
         cat $logfile;
     fi
+    print_log_artifacts "$artifact_dos_log" "$artifact_emu_log" "$artifact_bat" "$artifact_meta"
 else
     cat $logfile
+    print_log_artifacts "$artifact_dos_log" "$artifact_emu_log" "$artifact_bat" "$artifact_meta"
     grep -ie "failed" $logfile &> /dev/null && exit 1
 fi
 

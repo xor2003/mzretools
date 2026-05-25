@@ -46,10 +46,12 @@ string ScanQueue::statusString() const {
 } 
 
 RoutineIdx ScanQueue::getRoutineIdx(Offset off) const {
-    assert(off >= origin.toLinear());
+    if (off < origin.toLinear() || off >= origin.toLinear() + visited.size()) {
+        debug("Offset " + hexVal(off) + " out of bounds for scan queue, returning NULL_ROUTINE");
+        return NULL_ROUTINE;
+    }
     off -= origin.toLinear();
-    assert(off < visited.size());
-    return visited.at(off); 
+    return visited.at(off);
 }
 
 void ScanQueue::setRoutineIdx(Offset off, const Size length, RoutineIdx idx) {
@@ -168,9 +170,16 @@ bool ScanQueue::saveCall(const Address &dest, const CpuState &regs, const bool n
             ep.near = near;
             debug("Updated nearness for entrypoint " + ep.toString());
         }
+        // Update the name if we have a new one and it's not empty
+        if (!name.empty() && ep.name != name) {
+            debug("Updating name for entrypoint at " + dest.toString() + " from '" + ep.name + "' to '" + name + "'");
+            ep.name = name;
+        }
+        return false;
     }
     else if (hasPoint(dest, true)) {
         debug("Search queue already contains call to address "s + dest.toString());
+        return false;
     }
     else { // not a known entrypoint and not yet in queue
         destId = getRoutineIdx(dest.toLinear());
@@ -178,14 +187,13 @@ bool ScanQueue::saveCall(const Address &dest, const CpuState &regs, const bool n
         queue.emplace_back(Destination(dest, newRoutineIdx, true, regs));
         if (destId == NULL_ROUTINE)
             debug("Call destination not belonging to any routine, claiming as entrypoint for new routine " + to_string(newRoutineIdx) + ", queue size = " + to_string(size()));
-        else 
+        else
             debug("Call destination belonging to routine " + to_string(destId) + ", reclaiming as entrypoint for new routine " + to_string(newRoutineIdx) + ", queue size = " + to_string(size()));
         RoutineEntrypoint ep{dest, newRoutineIdx, near};
         if (!name.empty()) ep.name = name;
         entrypoints.push_back(ep);
         return true;
     }
-    return false;
 }
 
 // conditional jump, save as destination to be investigated, belonging to current routine

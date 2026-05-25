@@ -626,10 +626,11 @@ std::string Instruction::toString(const bool extended) const {
             const Word endAddr = addr.offset + length;
             str << hexVal(aoff, true, false);
             if (extended) {
-                if (aoff < endAddr) {
-                    str << " (" << hexVal(static_cast<Word>(endAddr - aoff), true, false) << " up)";
+                SWord rel = relativeOffset();
+                if (rel < 0) {
+                    str << " (" << hexVal(static_cast<Word>(-rel), true, false) << " up)";
                 } else {
-                    str << " (" << hexVal(static_cast<Word>(aoff - endAddr), true, false) << " down)";
+                    str << " (" << hexVal(static_cast<Word>(rel), true, false) << " down)";
                 }
             }
         }
