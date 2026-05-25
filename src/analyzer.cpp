@@ -519,8 +519,8 @@ Address Analyzer::findTargetLocation(const Executable &ref, const Executable &tg
 }
 
 // TODO: implement register value tracing like in exploreCode
-bool Analyzer::compareCode(const Executable &ref, Executable &tgt, const CodeMap &refMap) {
-    CodeMap tgtMap;
+bool Analyzer::compareCode(const Executable &ref, Executable &tgt, const CodeMap &refMap, const CodeMap &providedTgtMap) {
+    CodeMap tgtMap = providedTgtMap;
     if (!options.tgtMapPath.empty()) {
         tgtMap = CodeMap{options.tgtMapPath, tgt.getLoadSegment()};
     } else if (!refMap.empty()) {
@@ -528,14 +528,6 @@ bool Analyzer::compareCode(const Executable &ref, Executable &tgt, const CodeMap
         if (checkFile(options.tgtMapPath).exists) {
             tgtMap = CodeMap{options.tgtMapPath, tgt.getLoadSegment()};
         }
-    }
-    // If no target map was loaded, generate it from the target executable
-    if (tgtMap.empty()) {
-        verbose("No target map provided, generating from target executable");
-        Analyzer a{Analyzer::Options()}; // Create temporary analyzer
-        Analyzer a{Analyzer::Options()}; // Create temporary analyzer
-        a.seedQueue(CodeMap{}, tgt); // Seed known routines
-        tgtMap = a.exploreCode(tgt); // Generate map from target executable
     }
     verbose("Comparing code between reference (entrypoint "s + ref.entrypoint().toString() + ") and target (entrypoint " + tgt.entrypoint().toString() + ") executables");
     debug("Routine map of reference binary has " + to_string(refMap.routineCount()) + " entries");

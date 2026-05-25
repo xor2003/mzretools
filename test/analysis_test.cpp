@@ -409,7 +409,6 @@ TEST_F(AnalysisTest, CodeCompare) {
 TEST_F(AnalysisTest, CodeCompareSkip) {
     // compare with skip - larger buffer to prevent overflow
     const vector<Byte> refCode = {
-        0xcb, // retf (far return to terminate execution)
         0x90, // nop
         0x07, // pop es
         0x0e, // push cs
@@ -418,7 +417,6 @@ TEST_F(AnalysisTest, CodeCompareSkip) {
         0xc3, // ret
     };
     const vector<Byte> tgtCode = {
-        0xcb, // retf (far return to terminate execution)
         0x58, // pop ax
         0x9c, // pushf
         0x41, // inc cx
@@ -430,14 +428,14 @@ TEST_F(AnalysisTest, CodeCompareSkip) {
     Analyzer::Options opt;
     
     // Skip to the 'inc cx' instructions in both executables
-    opt.refSkip = 4; // skip retf, nop, pop es, push cs (4 instructions)
-    opt.tgtSkip = 3; // skip retf, pop ax, pushf (3 instructions)
+    opt.refSkip = 3; // skip nop, pop es, push cs
+    opt.tgtSkip = 2; // skip pop ax, pushf
     Analyzer a1(opt);
     ASSERT_TRUE(a1.compareCode(e1, e2, {}));
 
     // Test with different skip counts but same end result
-    opt.refSkip = 4;
-    opt.tgtSkip = 3;
+    opt.refSkip = 3;
+    opt.tgtSkip = 2;
     Analyzer a2(opt);
     ASSERT_TRUE(a2.compareCode(e1, e2, {}));
     
@@ -450,14 +448,14 @@ TEST_F(AnalysisTest, CodeCompareSkip) {
     Executable e3{0, ref2Code}, e4{0, tgt2Code};
 
     // test only ref skip
-    opt.refSkip = 4; // skip retf, nop, pop es, push cs (4 instructions)
+    opt.refSkip = 3; // skip nop, pop es, push cs
     opt.tgtSkip = 0;
     Analyzer a3(opt);
     ASSERT_TRUE(a3.compareCode(e1, e4, {}));
 
     // test only tgt skip
     opt.refSkip = 0;
-    opt.tgtSkip = 3; // skip retf, pop ax, pushf (3 instructions)
+    opt.tgtSkip = 2; // skip pop ax, pushf
     Analyzer a4(opt);
     ASSERT_TRUE(a4.compareCode(e3, e2, {}));
 }
