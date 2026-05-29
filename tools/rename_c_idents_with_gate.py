@@ -257,6 +257,109 @@ def parse_rename_pairs(pairs: List[str], map_file: Optional[str]) -> Dict[str, s
     return mapping
 
 
+def rewrite_source_preserve_directives(source: str, mapping: Dict[str, str]) -> str:
+    """Replace identifiers in-place while preserving all original formatting,
+    comments and preprocessor directives.
+    """
+    out: List[str] = []
+    i = 0
+    n = len(source)
+    at_line_start = True
+    while i < n:
+        c = source[i]
+
+        # preserve preprocessor directives verbatim (# as first non-space char)
+        if at_line_start:
+            k = i
+            while k < n and source[k] in " \t":
+                k += 1
+            if k < n and source[k] == "#":
+                j = k
+                while j < n:
+                    while j < n and source[j] != "\n":
+                        j += 1
+                    if j > 0 and source[j - 1] == "\\" and j < n:
+                        j += 1
+                        continue
+                    break
+                if j < n and source[j] == "\n":
+                    j += 1
+                out.append(source[i:j])
+                at_line_start = True
+                i = j
+                continue
+
+        # line comment
+        if c == "/" and i + 1 < n and source[i + 1] == "/":
+            j = i + 2
+            while j < n and source[j] != "\n":
+                j += 1
+            out.append(source[i:j])
+            i = j
+            at_line_start = (j == 0) or (j <= n and source[j - 1:j] == "\n")
+            continue
+
+        # block comment
+        if c == "/" and i + 1 < n and source[i + 1] == "*":
+            j = i + 2
+            while j + 1 < n and not (source[j] == "*" and source[j + 1] == "/"):
+                j += 1
+            j = min(j + 2, n)
+            out.append(source[i:j])
+            i = j
+            at_line_start = False
+            continue
+
+        # string literal
+        if c == '"':
+            j = i + 1
+            while j < n:
+                if source[j] == "\\":
+                    j += 2
+                    continue
+                if source[j] == '"':
+                    j += 1
+                    break
+                j += 1
+            out.append(source[i:j])
+            i = j
+            at_line_start = False
+            continue
+
+        # char literal
+        if c == "'":
+            j = i + 1
+            while j < n:
+                if source[j] == "\\":
+                    j += 2
+                    continue
+                if source[j] == "'":
+                    j += 1
+                    break
+                j += 1
+            out.append(source[i:j])
+            i = j
+            at_line_start = False
+            continue
+
+        # identifier token
+        if c == "_" or c.isalpha():
+            j = i + 1
+            while j < n and (source[j] == "_" or source[j].isalnum()):
+                j += 1
+            tok = source[i:j]
+            out.append(mapping.get(tok, tok))
+            i = j
+            at_line_start = False
+            continue
+
+        out.append(c)
+        at_line_start = (c == "\n")
+        i += 1
+
+    return "".join(out)
+
+
 def run_rename_with_gate(
     src_in: str,
     out_path: str,
@@ -272,15 +375,16 @@ def run_rename_with_gate(
     src_in = os.path.abspath(src_in)
     out_path = os.path.abspath(out_path)
 
-    cpp_args = cpp_args_raw.split()
-    ast = parse_file(src_in, use_cpp=True, cpp_path=cpp, cpp_args=cpp_args)
+    with open(src_in, "r", encoding="utf-8", errors="ignore") as f:
+        original_source = f.read()
 
-    renamer = Renamer(prefix=prefix, rename_nonstatic=rename_nonstatic, explicit_map=explicit_map)
-    renamer.build_global_map(ast)
-    ast = renamer.rename(ast)
+    if not explicit_map:
+        raise RuntimeError("explicit rename map required: provide --rename or --rename-map")
 
-    gen = c_generator.CGenerator()
-    rewritten = gen.visit(ast) + "\n"
+    # Explicit rename mode: preserve all directives/comments/formatting by
+    # rewriting tokens in the original source text.
+    rewritten = rewrite_source_preserve_directives(original_source, explicit_map)
+    stats: Dict[str, int] = {"functions": 0, "variables": 0, "params": 0, "labels": 0}
 
     out_dir = os.path.dirname(out_path)
     if out_dir:
@@ -323,12 +427,7 @@ def run_rename_with_gate(
     return {
         "ok": True,
         "output": out_path,
-        "stats": {
-            "functions": renamer.stats.functions,
-            "variables": renamer.stats.variables,
-            "params": renamer.stats.params,
-            "labels": renamer.stats.labels,
-        },
+        "stats": stats,
     }
 
 
