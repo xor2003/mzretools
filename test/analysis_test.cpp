@@ -229,6 +229,10 @@ TEST_F(AnalysisTest, CodeMapFromLinkMap) {
     ASSERT_EQ(v.addr, Address(0x5b7, 0x507a));
     ASSERT_EQ(v.off, 0x12);
     ASSERT_EQ(v.symbol(), "unitTypeTable+0x12");
+    // nonexistent variable
+    varAddr = Address(0x5b7, 0x0);
+    v = linkMap.getVariable(varAddr, true);
+    ASSERT_TRUE(v.name.empty());
 }
 
 TEST_F(AnalysisTest, BigCodeMap) {
