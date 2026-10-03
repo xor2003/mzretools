@@ -114,7 +114,8 @@ const char* instructionName(const InstructionClass c);
     X(PRF_SEG_SS) \
     X(PRF_SEG_DS) \
     X(PRF_CHAIN_REPNZ) \
-    X(PRF_CHAIN_REPZ)
+    X(PRF_CHAIN_REPZ) \
+    X(PRF_EMU)
 enum InstructionPrefix {
 #define X(x) x,
 INSTRUCTION_PREFIX
@@ -180,7 +181,8 @@ const char* prefixName(const InstructionPrefix p);
     X(OPR_IMM1) \
     X(OPR_IMM8) \
     X(OPR_IMM16) \
-    X(OPR_IMM32)
+    X(OPR_IMM32) \
+    X(OPR_MODRM)
 enum OperandType : Byte {
 #define X(x) x,
 OPERAND_TYPE

@@ -147,6 +147,7 @@ static const OperandSize OPR_SIZE[] = {
     OPRSZ_BYTE,  // immediate8
     OPRSZ_WORD,  // immediate16
     OPRSZ_DWORD, // immediate32
+    OPRSZ_BYTE,  // modrm byte value
 };
 
 // map modrm operand type to operand size
@@ -185,11 +186,11 @@ static const char* OPR_NAME[] = {
     "bx+si", "bx+di", "bp+si", "bp+di", "si", "di", "bx", 
     "", "bx+si", "bx+di", "bp+si", "bp+di", "si", "di", "bp", "bx",
     "", "bx+si", "bx+di", "bp+si", "bp+di", "si", "di", "bp", "bx",
-    "0", "1", "i8", "i16", "i32",
+    "0", "1", "i8", "i16", "i32", "modrm",
 };
 
 static const char* PRF_NAME[] = {
-    "???", "es:", "cs:", "ss:", "ds:", "repnz", "repz"
+    "???", "es:", "cs:", "ss:", "ds:", "repnz", "repz", "emu"
 };
 
 const char* instructionName(const InstructionClass c) {
@@ -290,6 +291,35 @@ void Instruction::load(const Byte *data)  {
         length++;
         debug("Found segment prefix "s + INS_PRF_ID[prefix] + ", length = " + to_string(length));
     }
+    // Borland floating-point emulator trap: `int 3X` does not invoke an interrupt handler in emulator-linked
+    // binaries, it prefixes an x87 instruction executed by the linked-in emulator library. Interrupts
+    // 34h-3Bh imply the x87 escape byte d8h+(n-34h), and the emulated instruction's modrm/displacement
+    // bytes follow. Interrupt 3Ch is followed by the full escape byte. Interrupt 3Dh emulates FWAIT with
+    // no further instruction bytes. The whole sequence decodes as a single instruction marked with
+    // the PRF_EMU prefix so comparisons do not conflate emulated and real x87 encodings.
+    else if (opcode == OP_INT_Ib) {
+        const Byte trap = *data;
+        if (trap >= 0x34 && trap <= 0x3b) { // implied x87 escape page
+            prefix = PRF_EMU;
+            opcode = 0xd8 + (trap - 0x34);
+            data++;
+            length++;
+        }
+        else if (trap == 0x3c && data[1] >= 0xd8 && data[1] <= 0xdf) { // explicit escape byte follows
+            prefix = PRF_EMU;
+            opcode = data[1];
+            data += 2;
+            length += 2;
+        }
+        else if (trap == 0x3d) { // emulated FWAIT, standalone
+            prefix = PRF_EMU;
+            opcode = OP_WAIT;
+            data++;
+            length++;
+        }
+        if (prefix == PRF_EMU)
+            debug("Found x87 emulation trap, opcode = "s + opcodeString(opcode) + ", length = " + to_string(length));
+    }
 
     // regular instruction opcode
     if (!opcodeIsModrm(opcode)) {
@@ -324,6 +354,17 @@ void Instruction::load(const Byte *data)  {
         op2.type = getModrmOperand(modrm, modop2);
         op1.size = MODRM_OPR_SIZE[modop1];
         op2.size = MODRM_OPR_SIZE[modop2];
+        // x87 escape opcodes d8-df: the modrm byte's /r field (for memory forms) or the entire byte
+        // (for register forms, where it also selects the FP stack register) constitutes the FP
+        // sub-operation. Preserve the byte as an operand so distinct FP instructions do not compare
+        // equal, and decode the real memory operand so displacement bytes are consumed correctly.
+        if (iclass == INS_FPU) {
+            op1.type = getModrmOperand(modrm, MODRM_M); // OPR_NONE for register forms
+            op1.size = op1.type == OPR_NONE ? OPRSZ_NONE : OPRSZ_UNK;
+            op2.type = OPR_MODRM;
+            op2.size = OPRSZ_BYTE;
+            op2.immval.u8 = modrm;
+        }
     }
     // group instruction opcode
     else {
@@ -541,7 +582,7 @@ std::string Instruction::Operand::toString() const {
     }
     else if (type == OPR_IMM0 || type == OPR_IMM1)
         str << OPR_NAME[type];
-    else if (type == OPR_IMM8)
+    else if (type == OPR_IMM8 || type == OPR_MODRM)
         str << hexVal(immval.u8, true, false);
     else if (type == OPR_IMM16)
         str << hexVal(immval.u16, true, false);
@@ -569,7 +610,7 @@ InstructionMatch Instruction::Operand::match(const Operand &other) const {
     // the rest assumes the types and sizes are the same
     // default value of true covers operands not having an offset/immval component
     bool match = true;
-    if (operandIsMemWithByteOffset(type) || type == OPR_IMM8) {
+    if (operandIsMemWithByteOffset(type) || type == OPR_IMM8 || type == OPR_MODRM) {
         match = immval.u8 == other.immval.u8;
     }
     else if (operandIsMemWithWordOffset(type) || type == OPR_IMM16) {
@@ -712,7 +753,10 @@ InstructionMatch Instruction::match(const Instruction &other) const {
     // normally we check whether instructions match in their "class", e.g. MOV, not whether they
     // have the same opcode. An exception are conditional jumps, which all belong to class JMP_IF,
     // so the opcode needs to be checked as well, but these do not have alternate encodings beyond these opcodes.
-    if (prefix != other.prefix || iclass != other.iclass || (iclass == INS_JMP_IF && opcode != other.opcode))
+    // The same applies to x87 floating point instructions: opcodes d8-df select the FP operation group
+    // (e.g. fld vs fist vs fadd), so escapes of different pages are different instructions.
+    if (prefix != other.prefix || iclass != other.iclass 
+        || ((iclass == INS_JMP_IF || iclass == INS_FPU) && opcode != other.opcode))
         return INS_MATCH_MISMATCH;
 
     // this can only return FULL (everything matches), DIFF (operand type match, different value) or MISMATCH (operand type different)
@@ -842,7 +886,11 @@ Size Instruction::loadImmediate(Operand &op, const Byte *data) {
         op.immval.u32 = 1;
         op.immsize = OPRSZ_NONE;
         debug("imm1 operand");
-        break;    
+        break;
+    case OPR_MODRM:
+        // value already set from the instruction's modrm byte during decode, consumes no stream bytes
+        op.immsize = OPRSZ_BYTE;
+        break;
     case OPR_IMM32:
         size = sizeof(DWord);
         memcpy(&dwordVal, data, size);
