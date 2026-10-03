@@ -63,27 +63,30 @@ add_custom_command(
     DEPENDS ${CMAKE_SOURCE_DIR}/version.txt ${CMAKE_SOURCE_DIR}/tools/version_gen.sh
 )
 
-# Include Google testing framework
+# Include Google testing framework (optional — only if vendored/present)
 # Prevent overriding the parent project's compiler/linker settings on Windows
 # Otherwise you get LNK2038
-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-add_subdirectory(googletest)
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/googletest/CMakeLists.txt)
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    add_subdirectory(googletest)
 
-set(TEST_SRC
-    test/test_main.cpp
-    test/debug.h
-    test/cpu_test.cpp
-    test/dos_test.cpp
-    test/memory_test.cpp
-    test/analysis_test.cpp)
+    set(TEST_SRC
+        test/test_main.cpp
+        test/debug.h
+        test/cpu_test.cpp
+        test/dos_test.cpp
+        test/memory_test.cpp
+        test/analysis_test.cpp)
 
-# the test application executable
-add_executable(runtest ${TEST_SRC})
-target_include_directories(runtest PUBLIC include ${gtest_SOURCE_DIR}/include ${gmock_SOURCE_DIR}/include)
-target_link_libraries(runtest PUBLIC gtest gmock libdos)
-# run tests automatically as part of the build
-add_custom_target(run_unit_test ALL COMMAND ./runtest DEPENDS runtest)
-add_custom_target(debug_test COMMAND ./runtest --debug DEPENDS runtest)
+    # the test application executable
+    add_executable(runtest ${TEST_SRC})
+    target_include_directories(runtest PUBLIC include ${gtest_SOURCE_DIR}/include ${gmock_SOURCE_DIR}/include)
+    target_link_libraries(runtest PUBLIC gtest gmock libdos)
+    # run tests automatically as part of the build
+    add_custom_target(run_unit_test ALL COMMAND ./runtest DEPENDS runtest)
+    add_custom_target(debug_test COMMAND ./runtest --debug DEPENDS runtest)
+
+endif()
 
 # utility executables
 add_executable(mzhdr src/mzhdr.cpp)

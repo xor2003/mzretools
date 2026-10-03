@@ -55,10 +55,15 @@ bool OffsetMap::codeMatch(const Address from, const Address to) {
 }
 
 bool OffsetMap::dataMatch(const SOffset from, const SOffset to) {
-    auto &mappings = dataMap[from];
+    // 16-bit memory displacements wrap around: an indexed access like
+    // [si-0x784c] and an absolute access like [0x87b4] can reference the same
+    // variable. Canonicalize both offsets into the unsigned 16-bit space so
+    // they share one mapping instead of colliding as distinct keys.
+    const SOffset from16 = from & 0xffff, to16 = to & 0xffff;
+    auto &mappings = dataMap[from16];
     // matching mapping already exists in map
-    if (std::find(begin(mappings), end(mappings), to) != mappings.end()) {
-        debug("Existing data offset mapping " + hexVal(from) + " -> " + dataStr(mappings) + " matches");
+    if (std::find(begin(mappings), end(mappings), to16) != mappings.end()) {
+        debug("Existing data offset mapping " + hexVal(from16) + " -> " + dataStr(mappings) + " matches");
         return true;
     }
     // mapping does not exist, but still room left, so save it and carry on
@@ -69,25 +74,25 @@ bool OffsetMap::dataMatch(const SOffset from, const SOffset to) {
         // perhaps store this information from the mzmap run?
         Size toCount = 0;
         for (const auto& [f, tv] : dataMap) {
-            if (std::find(begin(tv), end(tv), to) != tv.end()) {
+            if (std::find(begin(tv), end(tv), to16) != tv.end()) {
                 toCount++;
                 if (toCount < maxData) {
-                    debug("Data offset mapping " + hexVal(from) + "->" + hexVal(to) + " colides with existing " + hexVal(f) + "->" + dataStr(tv) 
+                    debug("Data offset mapping " + hexVal(from16) + "->" + hexVal(to16) + " colides with existing " + hexVal(f) + "->" + dataStr(tv) 
                         + ", allowed " + to_string(toCount) + "/" + to_string(maxData));
                 }
                 else {
-                    error("Data offset mapping " + hexVal(from) + "->" + hexVal(to) + " colides with existing " + hexVal(f) + "->" + dataStr(tv));
+                    error("Data offset mapping " + hexVal(from16) + "->" + hexVal(to16) + " colides with existing " + hexVal(f) + "->" + dataStr(tv));
                     return false;
                 }
             }
         }
-        debug("Registering new data offset mapping: " + hexVal(from) + " -> " + hexVal(to));
-        mappings.push_back(to);
+        debug("Registering new data offset mapping: " + hexVal(from16) + " -> " + hexVal(to16));
+        mappings.push_back(to16);
         return true;
     }
     // no matching mapping and limit already reached
     else {
-        error("Data offset mapping " + hexVal(from) + "->" + hexVal(to) + " colides with existing " + hexVal(from) + "->" + dataStr(mappings));
+        error("Data offset mapping " + hexVal(from16) + "->" + hexVal(to16) + " colides with existing " + hexVal(from16) + "->" + dataStr(mappings));
         return false;
     }
 }
@@ -681,6 +686,12 @@ bool Analyzer::compareCode(const Executable &ref, Executable &tgt) {
         // get next location for linear scan and comparison of instructions from the front of the queue,
         // to visit functions in the same order in which they were first encountered
         const Destination compare = scanQueue.nextPoint();
+        // --nocall: single-routine comparison — once the seed entrypoint has
+        // been compared, skip remaining queued locations; their callees may
+        // legitimately be absent from the target executable (e.g. thunks in
+        // the reference that the candidate build does not contain)
+        if (options.noCall && compare.address != ref.entrypoint()
+            && scanQueue.getRoutineIdx(ref.entrypoint().toLinear()) == VISITED_ID) break;
         verbose("New comparison location "s + compare.address.toString() + ", queue size = " + to_string(scanQueue.size()));
         // when entering a routine, forget all the current stack offset mappings
         if (compare.isCall) {
@@ -1393,6 +1404,11 @@ Analyzer::ComparisonResult Analyzer::instructionsMatch(const Executable &ref, co
         Register segReg = refInstr.memSegmentId();
         switch (segReg) {
         case REG_CS:
+            // an indirect jump/call through a cs: pointer table (jmp/call
+            // cs:[bx+disp], e.g. a switch dispatch table) references a jump
+            // table whose base offset legitimately differs between the
+            // executables — tolerate it instead of offset-mapping
+            if (refInstr.isBranch()) { match = true; break; }
             match = offMap.codeMatch(refOfs, tgtOfs);
             if (!match) verbose("Instruction mismatch due to code segment offset mapping conflict");
             break;

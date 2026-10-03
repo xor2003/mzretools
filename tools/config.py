@@ -20,6 +20,7 @@ class Config:
         self.data_segments = []
         self.data_size = 0
         self.replace = []
+        self.subs = []
         self.insert = []
         self.extract = []
         self.remove = []
@@ -61,6 +62,10 @@ class Config:
                     l = self.makeLocation(i)
                     debug(f"{name}: {l}")
                     getattr(self, name).append(l)
+        if 'subs' in self.config:
+            for s in self.config['subs']:
+                self.subs.append((re.compile(s['from']), s['to']))
+                debug(f"subs: {s['from']} -> {s['to']}")
         for name in [ 'extract' ]:
             if name in self.config:
                 for e in self.config[name]:
